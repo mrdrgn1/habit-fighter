@@ -57,6 +57,9 @@ window.HF = window.HF || {};
     heal: () => { tone(523, 0.06); tone(659, 0.06, 0.06); tone(784, 0.1, 0.12); },
     poison: () => { tone(300, 0.06); tone(240, 0.06, 0.07); tone(170, 0.14, 0.14, 'square', 0.06, 90); },
     capture: () => { tone(980, 0.03, 0, 'square', 0.04); tone(1400, 0.05, 0.04, 'square', 0.035); },
+    // coin: two bright steps up, the classic "got it" blip.
+    coin: () => { tone(1046, 0.045, 0, 'square', 0.05); tone(1568, 0.09, 0.05, 'square', 0.045); },
+    coinDown: () => { tone(784, 0.05, 0, 'square', 0.045); tone(523, 0.1, 0.05, 'square', 0.04); },
     win: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.16, i * 0.14, 'square', 0.055)),
     lose: () => [392, 330, 262, 196].forEach((f, i) => tone(f, 0.2, i * 0.16, 'square', 0.05)),
     join: () => { tone(400, 0.06); tone(600, 0.08, 0.07); tone(900, 0.12, 0.14); },

@@ -16,6 +16,8 @@ window.HF = window.HF || {};
   const $$ = HF.$$;
 
   const MAX_HP = 120;
+  const TOK_START = 10;   // every trainer starts a match with 10 🪙
+  const TOK_DEFAULT_ANTE = 3;
 
   /* Type wheel: each type beats exactly one other. */
   const BEATS = {
@@ -50,20 +52,14 @@ window.HF = window.HF || {};
     seat: null,
     name: 'TRAINER',
     type: 'STUDY',
-    voterId: (function () {
-      let id = localStorage.getItem('hf:voter');
-      if (!id) {
-        id = 'v' + Math.random().toString(36).slice(2, 10);
-        localStorage.setItem('hf:voter', id);
-      }
-      return id;
-    })(),
+    ante: TOK_DEFAULT_ANTE,
   };
 
   let state = null;
   let busy = false;
   let currentLayer = 'title';
   let seenCapAt = 0;
+  const lastTok = { a: null, b: null, pot: null };
   let autoTimer = null;
   let focusStart = 0;
   let focusArmed = false;
@@ -89,6 +85,9 @@ window.HF = window.HF || {};
       proofs: 0,
       bluff: 3,
       fraud: false,
+      tokens: TOK_START,
+      // signed per-category tally so the receipt can show where tokens went
+      tok: { combo: 0, cap: 0, tax: 0, ante: 0, pot: 0 },
     };
   }
 
@@ -106,11 +105,67 @@ window.HF = window.HF || {};
       autoRival: false,
       log: [],
       proof: null,
+      ante: TOK_DEFAULT_ANTE,
+      pot: 0,
       cap: { active: false, by: null, accused: null, at: 0, result: null },
       duel: { active: false, by: null, results: {}, at: 0 },
       a: fighter(name, type),
       b: null,
     };
+  }
+
+  /**
+   * Move tokens between a wallet and the pot. Wallets never go below zero, so a
+   * player who cannot cover a fine pays what they have and nothing more.
+   * from / to: 'a', 'b' or 'pot'.
+   */
+  function transfer(m, from, to, amount, opts) {
+    const o = opts || {};
+    const cat = o.category || 'misc';
+    if (!amount || amount <= 0) return 0;
+
+    const source = from === 'pot' ? m.pot : (m[from] && m[from].tokens) || 0;
+    const moved = Math.min(amount, Math.max(0, source));
+    if (moved <= 0) return 0;
+
+    if (from === 'pot') {
+      m.pot -= moved;
+    } else {
+      m[from].tokens -= moved;
+      if (m[from].tok) m[from].tok[cat] = (m[from].tok[cat] || 0) - moved;
+    }
+
+    if (to === 'pot') {
+      m.pot += moved;
+    } else if (m[to]) {
+      m[to].tokens += moved;
+      if (m[to].tok) m[to].tok[cat] = (m[to].tok[cat] || 0) + moved;
+    }
+
+    if (o.log) pushLog(m, o.log.split('%n').join(String(moved)), o.tone || 'is-system');
+    return moved;
+  }
+
+  /**
+   * Both wallets reset to 10 and stake the ante. Called at the start of every
+   * battle and on rematch, so the pot always opens correct.
+   */
+  function openBattle(m, ante) {
+    const stake = Math.max(1, Math.min(10, Number(ante) || TOK_DEFAULT_ANTE));
+    m.ante = stake;
+    m.pot = 0;
+    ['a', 'b'].forEach((side) => {
+      const f = m[side];
+      if (!f) return;
+      f.tokens = TOK_START;
+      f.tok = { combo: 0, cap: 0, tax: 0, ante: 0, pot: 0 };
+      transfer(m, side, 'pot', stake, { category: 'ante' });
+    });
+    lastTok.a = null;
+    lastTok.b = null;
+    lastTok.pot = null;
+    const pot = m.pot;
+    pushLog(m, `Antes paid — the Match Pot holds ${pot} 🪙.`, 'is-system');
   }
 
   function pushLog(match, text, tone) {
@@ -172,8 +227,17 @@ window.HF = window.HF || {};
     match.winner = alive.length === 1 ? alive[0] : null;
 
     dead.forEach((s) => pushLog(match, `${match[s].name} FAINTED!`, 'is-miss'));
-    if (match.winner) pushLog(match, `${match[match.winner].name} WINS THE MATCH!`, 'is-super');
-    else pushLog(match, 'DOUBLE FAINT. NOBODY WINS.', 'is-super');
+    if (match.winner) {
+      pushLog(match, `${match[match.winner].name} WINS THE MATCH!`, 'is-super');
+      // Winner takes the whole pot. Double KOs leave it on the table.
+      transfer(match, 'pot', match.winner, match.pot, {
+        category: 'pot',
+        log: `${match[match.winner].name} SWEEPS THE POT: %n 🪙`,
+        tone: 'is-super',
+      });
+    } else {
+      pushLog(match, 'DOUBLE FAINT. NOBODY WINS.', 'is-super');
+    }
   }
 
   /** Out of PP on every move would soft-lock the turn — hand out a second wind. */
@@ -257,6 +321,12 @@ window.HF = window.HF || {};
       if (roll.combo) {
         pushLog(match, `COMBO! It's super effective! -${roll.dmg} HP`, 'is-super');
         events.push('super');
+        // LOCKED IN: a perfect type combo steals a token off the defender.
+        transfer(match, foeSide, side, 1, {
+          category: 'combo',
+          log: `LOCKED IN! ${atk.name} steals %n 🪙 from ${def.name}.`,
+          tone: 'is-super',
+        });
       } else if (roll.effective) {
         pushLog(match, `It's super effective! -${roll.dmg} HP`, 'is-super');
         events.push('super');
@@ -406,14 +476,58 @@ window.HF = window.HF || {};
     renderMoves(match);
     renderProof(match, me);
 
+    renderTokens(match);
+
+    const myTokens = me.tokens == null ? TOK_START : me.tokens;
     $('bluff-count').textContent = me.bluff == null ? 3 : me.bluff;
-    $('btn-bluff').disabled = !me || (me.bluff || 0) <= 0 || match.zone !== 'battle';
+    $('btn-bluff').disabled = !me || (me.bluff || 0) <= 0 || match.zone !== 'battle' || myTokens <= 0;
     $('btn-duel').disabled = match.zone !== 'battle';
     $('btn-rematch').hidden = match.zone !== 'over';
 
     maybeCapOverlay(match);
     renderDuel(match);
     maybeAutoPlay();
+  }
+
+  /** Wallet + pot bar, with a floating pixel pop whenever a number moves. */
+  function renderTokens(match) {
+    const a = match.a || {};
+    const b = match.b || {};
+    const pot = match.pot || 0;
+    const tokA = a.tokens == null ? TOK_START : a.tokens;
+    const tokB = b.tokens == null ? TOK_START : b.tokens;
+
+    $('tok-a').textContent = tokA;
+    $('tok-b').textContent = tokB;
+    $('tok-pot').textContent = pot;
+    $('tok-a-name').textContent = (a.name || 'P1').slice(0, 7);
+    $('tok-b-name').textContent = (b.name || 'P2').slice(0, 7);
+
+    const brokeA = tokA <= 0;
+    const brokeB = tokB <= 0;
+    $('bankrupt-a').hidden = !brokeA;
+    $('bankrupt-b').hidden = !brokeB;
+    $('tok-a').classList.toggle('is-broke', brokeA);
+    $('tok-b').classList.toggle('is-broke', brokeB);
+
+    [[ 'a', tokA ], [ 'b', tokB ], [ 'pot', pot ]].forEach(([key, value]) => {
+      const prev = lastTok[key];
+      lastTok[key] = value;
+      if (prev == null || prev === value) return;
+      popTokens(key, value - prev);
+    });
+  }
+
+  function popTokens(key, delta) {
+    if (!delta) return;
+    const host = $('tok-' + key).closest('.tok-cell');
+    if (!host) return;
+    const el = document.createElement('span');
+    el.className = 'tok-pop' + (delta > 0 ? '' : ' is-down');
+    el.textContent = (delta > 0 ? '+' : '-') + Math.abs(delta) + ' 🪙';
+    host.appendChild(el);
+    setTimeout(() => el.remove(), 900);
+    HF.sound.play(delta > 0 ? 'coin' : 'coinDown');
   }
 
   function renderMoves(match) {
@@ -520,7 +634,8 @@ window.HF = window.HF || {};
     try {
       const code = HF.net.newCode();
       const match = newMatch(code, session.name, session.type);
-      pushLog(match, `${match.a.name} opens a match. Pick your moves carefully.`, 'is-system');
+      match.ante = session.ante || TOK_DEFAULT_ANTE;
+      pushLog(match, `${match.a.name} opens a match. Ante set to ${match.ante} 🪙 each.`, 'is-system');
       await HF.net.write(code, match);
       session.seat = 'a';
       session.code = code;
@@ -583,7 +698,8 @@ window.HF = window.HF || {};
       m.round = 1;
       m.log = [];
       pushLog(m, `${m.a.name} (${m.a.type}) VS ${m.b.name} (${m.b.type})`, 'is-system');
-      pushLog(m, 'Snap a PROOF after every move. CALL BLUFF if it smells.', 'is-system');
+      openBattle(m, m.ante || session.ante);
+      pushLog(m, 'Combos steal tokens. CALL CAP when a habit smells.', 'is-system');
     });
     HF.sound.play('join');
   }
@@ -598,6 +714,7 @@ window.HF = window.HF || {};
       m.turn = 'a';
       m.log = [];
       pushLog(m, `SOLO DEMO — ${m.b.name} (${m.b.type}) steps up. AUTO-RIVAL ON.`, 'is-system');
+      openBattle(m, m.ante || session.ante);
     });
     HF.ui.toast('AUTO-RIVAL ON · one person can demo both sides');
   }
@@ -628,6 +745,7 @@ window.HF = window.HF || {};
       m.cap = { active: false, by: null, accused: null, at: 0, result: null };
       m.duel = { active: false, by: null, results: {}, at: 0 };
       pushLog(m, 'REMATCH — HP, PP and statuses reset.', 'is-system');
+      openBattle(m, m.ante || TOK_DEFAULT_ANTE);
     });
     HF.ui.reviveSprites();
     HF.sound.play('join');
@@ -721,12 +839,24 @@ window.HF = window.HF || {};
     if (kind === 'proof' && accuser) {
       accuser.hp = Math.max(0, accuser.hp - 15);
       pushLog(m, `PROOF LANDED — ${accuser.name} called it wrong (-15 HP).`, 'is-hit');
+      // Crying wolf costs the accuser a token, paid to the innocent party.
+      transfer(m, cap.by, cap.accused, 1, {
+        category: 'cap',
+        log: `FALSE CALL FINE — ${accuser.name} pays %n 🪙 to ${accused.name}.`,
+        tone: 'is-hit',
+      });
     } else if (kind === 'concede' && accused) {
       accused.hp = Math.max(0, accused.hp - 25);
       accused.status = 'FRAUD';
       accused.statusTurns = 3;
       accused.fraud = true;
       pushLog(m, `NO PROOF — ${accused.name} was capping (-25 HP, FRAUD).`, 'is-super');
+      // Caught lying: the liar pays the accuser.
+      transfer(m, cap.accused, cap.by, 2, {
+        category: 'cap',
+        log: `${accused.name} pays the %n 🪙 CAP FINE to ${accuser.name}.`,
+        tone: 'is-super',
+      });
     } else if (accuser) {
       pushLog(m, `${accuser.name} drops the call. No damage.`, 'is-system');
     }
@@ -747,6 +877,10 @@ window.HF = window.HF || {};
     const me = state[session.seat];
     if (!me || (me.bluff || 0) <= 0) {
       HF.ui.toast('OUT OF CAP CALLS', true);
+      return;
+    }
+    if ((me.tokens || 0) <= 0) {
+      HF.ui.toast('BANKRUPT - NO TOKENS TO STAKE', true);
       return;
     }
 
@@ -881,11 +1015,72 @@ window.HF = window.HF || {};
         me.status = 'POISON';
         me.statusTurns = 3;
         pushLog(m, `DOOMSCROLL POISON! ${me.name} tabbed out for ${Math.round(away / 1000)}s (-6 HP)`, 'is-miss');
+        transfer(m, session.seat, 'pot', 1, {
+          category: 'tax',
+          log: `POISON TAX — ${me.name} drops %n 🪙 in the pot.`,
+          tone: 'is-miss',
+        });
         checkFaint(m);
       });
     } catch (err) {
       /* offline: the poison will land next time we sync */
     }
+  }
+
+  /* -------------------------------------------------------------- token lab */
+
+  /** Dev-only: fire any token rule by hand so the demo can show them on cue. */
+  async function tokenLab(kind) {
+    if (!state || !session.code || state.zone !== 'battle') {
+      HF.ui.toast('START A BATTLE FIRST', true);
+      return;
+    }
+    const foe = other(session.seat);
+
+    await publish((m) => {
+      const me = m[session.seat];
+
+      switch (kind) {
+        case 'gain':
+          transfer(m, 'pot', session.seat, 1, { category: 'pot', log: `DEV: ${me.name} pulls %n 🪙 out of the pot.` });
+          break;
+        case 'lose':
+          transfer(m, session.seat, 'pot', 1, { category: 'tax', log: `DEV: ${me.name} drops %n 🪙 in the pot.` });
+          break;
+        case 'steal':
+          transfer(m, foe, session.seat, 1, { category: 'combo', log: `DEV: LOCKED IN — ${me.name} steals %n 🪙.`, tone: 'is-super' });
+          break;
+        case 'cap-guilty':
+          m.cap = { active: true, by: session.seat, accused: foe, at: Date.now(), result: null };
+          settleCap(m, 'concede');
+          break;
+        case 'cap-proof':
+          m.cap = { active: true, by: session.seat, accused: foe, at: Date.now(), result: null };
+          settleCap(m, 'proof');
+          break;
+        case 'poison':
+          transfer(m, session.seat, 'pot', 1, { category: 'tax', log: `DEV: poison tax — ${me.name} drops %n 🪙.`, tone: 'is-miss' });
+          break;
+        case 'sweep':
+          transfer(m, 'pot', session.seat, m.pot, { category: 'pot', log: `DEV: ${me.name} sweeps the pot: %n 🪙.`, tone: 'is-super' });
+          break;
+        case 'bankrupt':
+          transfer(m, session.seat, 'pot', me.tokens, { category: 'tax', log: `DEV: ${me.name} is BANKRUPT.` });
+          break;
+        case 'reset':
+          openBattle(m, m.ante || TOK_DEFAULT_ANTE);
+          pushLog(m, 'DEV: both wallets back to 10 🪙.', 'is-system');
+          break;
+        case 'ko':
+          if (m[foe]) m[foe].hp = 0;
+          checkFaint(m);
+          break;
+        default:
+          break;
+      }
+    });
+
+    HF.sound.play('select');
   }
 
   /* ------------------------------------------------------------- auto rival */
@@ -1019,6 +1214,25 @@ window.HF = window.HF || {};
 
     $('btn-proof').addEventListener('click', openCamera);
     $('btn-bluff').addEventListener('click', callCap);
+
+    $$('#ante-pick .type-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        session.ante = Number(btn.dataset.ante) || TOK_DEFAULT_ANTE;
+        $$('#ante-pick .type-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+        HF.sound.play('select');
+      });
+    });
+
+    $('btn-dev').addEventListener('click', () => {
+      const panel = $('dev-panel');
+      const open = panel.hidden;
+      panel.hidden = !open;
+      $('btn-dev').setAttribute('aria-expanded', open ? 'true' : 'false');
+      HF.sound.play('select');
+    });
+    $$('[data-tok]').forEach((btn) => {
+      btn.addEventListener('click', () => tokenLab(btn.dataset.tok));
+    });
     $('btn-duel').addEventListener('click', startDuel);
     $('btn-rematch').addEventListener('click', rematch);
     $('btn-focus-tap').addEventListener('click', tapFocus);

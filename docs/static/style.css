@@ -686,20 +686,22 @@ img { max-width: 100%; display: block; }
 /* Short screens: a real phone browser steals ~120px for its chrome, so the
    device has to compress instead of pushing PRINT below the fold. */
 @media (max-height: 800px) {
-  body { padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
-  .lcd { min-height: 0; padding: 8px; gap: 6px; }
-  .textbox { flex: 0 0 auto; height: 96px; min-height: 0; padding: 8px 8px 12px; overflow: hidden; }
+  body { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  .lcd { min-height: 0; padding: 7px; gap: 5px; }
+  .textbox { flex: 0 0 auto; height: 74px; min-height: 0; padding: 7px 8px 10px; overflow: hidden; }
+  .tokenbar { padding: 2px 0; }
+  .typechain { margin-top: 4px; }
   /* on a short screen show only the two newest log entries so nothing is clipped */
   .textbox #line-1 { display: none; }
   .brandline { display: none; }
   .sprite { width: 50px; height: 50px; }
   .sprite-slot { width: 54px; }
-  .moves { gap: 6px; margin-top: 8px; }
-  .move-btn { padding: 8px; }
+  .moves { gap: 5px; margin-top: 6px; }
+  .move-btn { padding: 6px 8px; }
   .move-btn .mv-meta,
   .move-btn .mv-note { font-size: 6px; }
-  .utils { margin-top: 5px; gap: 5px; }
-  .utils .btn { padding: 8px; }
+  .utils { margin-top: 4px; gap: 5px; }
+  .utils .btn { padding: 7px 6px; }
   .device-bottom { padding-top: 6px; }
   .btn-rematch { margin-top: 4px; }
 }
@@ -751,7 +753,76 @@ img { max-width: 100%; display: block; }
 .qr-label { font-size: 7.5px; line-height: 1.9; }
 .qr-label span { font-size: 6px; color: var(--dark); }
 
-/* 15. How to play -------------------------------------------------------- */
+/* 15. Tokens: wallets, pot and pixel pops -------------------------------- */
+.tokenbar {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  padding: 3px 0;
+  border-top: 2px solid var(--dark);
+  border-bottom: 2px solid var(--dark);
+  color: var(--ink);
+}
+.tok-cell {
+  position: relative;
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 3px 4px;
+  border: 2px solid var(--dark);
+  background: var(--lcd);
+}
+.tok-cell.is-pot { flex: 1.15 1 0; justify-content: center; background: var(--mid); border-color: var(--ink); }
+.tok-cell.is-right { justify-content: flex-end; }
+.tok-who { font-size: 5.6px; line-height: 1.4; color: var(--dark); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tok-amount { font-size: 9px; color: var(--ink); }
+.tok-amount.is-broke { color: var(--dark); }
+.tok-unit { font-size: 8px; }
+.bankrupt {
+  font-size: 5.2px;
+  padding: 2px 3px;
+  color: var(--lcd);
+  background: var(--ink);
+  border: 1px solid var(--dark);
+  white-space: nowrap;
+}
+.tok-pop {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% - 2px);
+  z-index: 6;
+  transform: translateX(-50%);
+  padding: 2px 3px;
+  font-size: 7px;
+  white-space: nowrap;
+  color: var(--lcd);
+  background: var(--ink);
+  border: 1px solid var(--dark);
+  pointer-events: none;
+  animation: tokPop .85s steps(7) forwards;
+}
+.tok-pop.is-down { color: var(--mid); }
+@keyframes tokPop {
+  0% { opacity: 0; transform: translate(-50%, 5px); }
+  30% { opacity: 1; transform: translate(-50%, -1px); }
+  100% { opacity: 0; transform: translate(-50%, -15px); }
+}
+
+/* dev panel: the only place that can move tokens by hand */
+.pill-btn.is-dev { font-size: 6px; padding: 3px 5px; }
+.dev-panel {
+  margin-top: 12px;
+  padding: 10px;
+  border: 2px dashed var(--dark);
+  background: rgba(15, 56, 15, .3);
+}
+.dev-title { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; font-size: 7px; color: var(--mid); }
+.dev-title span { font-size: 6px; color: var(--dark); }
+.dev-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+
+/* 16. How to play -------------------------------------------------------- */
 .manual { gap: 12px; }
 .manual-step { display: flex; gap: 10px; align-items: flex-start; }
 .manual-num {
