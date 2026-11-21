@@ -2282,8 +2282,13 @@ window.HF = window.HF || {};
     if (last && lastSeat) {
       HF.net.read(last)
         .then((match) => {
-          // Rooms from before loadouts existed cannot be played on this build.
-          if (!match || !match[lastSeat] || !match.loadout) {
+          // Rooms from before loadouts existed — or from the four-type build —
+          // cannot be played on this build.
+          const savedLoadouts = match && match.loadout;
+          const staleType = !!(savedLoadouts && ['a', 'b'].some((side) => (
+            savedLoadouts[side] && TYPES.indexOf(savedLoadouts[side].type) === -1
+          )));
+          if (!match || !match[lastSeat] || !match.loadout || staleType) {
             if (match) {
               try { localStorage.removeItem('hf:last'); } catch (err) { /* private mode */ }
               sessionStorage.removeItem('hf:seat:' + last);
