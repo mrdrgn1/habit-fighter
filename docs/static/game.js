@@ -66,6 +66,9 @@ window.HF = window.HF || {};
   let pickerType = '';
 
   const other = (side) => (side === 'a' ? 'b' : 'a');
+  const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ));
 
   /* ---------------------------------------------------------------------- */
   /* 1. Device account + battle history                                     */
@@ -200,9 +203,9 @@ window.HF = window.HF || {};
       const tone = entry.result === 'WIN' ? 'is-win' : entry.result === 'LOSS' ? 'is-loss' : 'is-draw';
       return `<div class="hist-row">
         <span class="hist-when">${when}</span>
-        <span class="hist-who">VS ${entry.rival}<br><em>${entry.myType} v ${entry.rivalType}</em></span>
-        <span class="hist-res ${tone}">${entry.result}</span>
-        <span class="hist-net">${sign}${entry.net} 🪙</span>
+        <span class="hist-who">VS ${esc(entry.rival)}<br><em>${esc(entry.myType)} v ${esc(entry.rivalType)}</em></span>
+        <span class="hist-res ${tone}">${esc(entry.result)}</span>
+        <span class="hist-net">${sign}${Number(entry.net) || 0} 🪙</span>
       </div>`;
     }).join('');
   }
