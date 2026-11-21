@@ -1,0 +1,62 @@
+name: Publish the game to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  LIVE: https://habit-fighter-1ev30m.freebuff.site
+  STATIC_FILES: style.css ui.js firebase.js camera.js receipt.js game.js qrcode.js qr.js
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The game is authored in the Freebuff project and served from there.
+      # This pulls the built files so the repo always matches what is live.
+      - name: Pull the game from the live deploy
+        run: |
+          set -euo pipefail
+          rm -rf public
+          mkdir -p public/static
+          curl -fsSL "$LIVE/" -o public/index.html
+          curl -fsSL "$LIVE/config.js" -o public/config.js
+          for f in $STATIC_FILES; do
+            curl -fsSL "$LIVE/static/$f" -o "public/static/$f"
+          done
+          find public -type f | sort
+
+      - name: Keep the source in the repo
+        run: |
+          set -euo pipefail
+          git config user.name "habit-fighter"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A public
+          if git diff --cached --quiet; then
+            echo "already up to date"
+          else
+            git commit -m "Mirror the live build"
+            git push
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deployment
+        uses: actions/deploy-pages@v4
