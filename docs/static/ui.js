@@ -90,6 +90,7 @@ window.HF = window.HF || {};
   const layers = {
     title: $('layer-title'),
     howto: $('layer-howto'),
+    history: $('layer-history'),
     lobby: $('layer-lobby'),
     battle: $('layer-battle'),
   };

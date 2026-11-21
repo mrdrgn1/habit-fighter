@@ -29,6 +29,7 @@
         <span class="logo-accent">FIGHTER</span>
       </h1>
       <p class="logo-sub">GAME BOY EDITION</p>
+      <p class="acct-line" id="acct-line">DEVICE TRAINER · 50 🪙</p>
 
       <div class="panel">
         <label class="field">
@@ -37,9 +38,10 @@
         </label>
 
         <div class="field">
-          <span class="field-label">YOUR MAJOR</span>
+          <span class="field-label">YOUR TYPE</span>
           <div class="types" id="type-pick" role="group" aria-label="Pick your type">
             <button class="type-btn is-active" type="button" data-type="STUDY">STUDY</button>
+            <button class="type-btn" type="button" data-type="LECTURE">LECTURE</button>
             <button class="type-btn" type="button" data-type="GYM">GYM</button>
             <button class="type-btn" type="button" data-type="SOCIAL">SOCIAL</button>
           </div>
@@ -48,8 +50,7 @@
             <ul class="typechart-list">
               <li><b>STUDY</b><span class="arrow">›</span><b>LECTURE</b></li>
               <li><b>LECTURE</b><span class="arrow">›</span><b>GYM</b></li>
-              <li><b>GYM</b><span class="arrow">›</span><b>COMMUTE</b></li>
-              <li><b>COMMUTE</b><span class="arrow">›</span><b>SOCIAL</b></li>
+              <li><b>GYM</b><span class="arrow">›</span><b>SOCIAL</b></li>
               <li><b>SOCIAL</b><span class="arrow">›</span><b>STUDY</b></li>
             </ul>
             <p class="hint">Super effective = 1.5×, and 2.25× if they already have a status.</p>
@@ -63,11 +64,12 @@
             <button class="type-btn is-active" type="button" data-ante="3">3 🪙</button>
             <button class="type-btn" type="button" data-ante="5">5 🪙</button>
           </div>
-          <p class="hint">Both trainers start with 10 🪙. The ante goes straight into the Match Pot.</p>
+          <p class="hint" id="ante-hint">Wallet: 50 🪙 saved on this device.</p>
         </div>
 
         <button class="btn btn-primary btn-block" id="btn-create" type="button">▶ NEW MATCH</button>
         <button class="btn btn-block" id="btn-howto" type="button">? HOW TO PLAY</button>
+        <button class="btn btn-block" id="btn-history" type="button">▤ BATTLE HISTORY</button>
 
         <div class="join">
           <input class="nes-input" id="join-code" maxlength="6" placeholder="CODE" autocomplete="off" spellcheck="false" aria-label="Room code">
@@ -92,73 +94,81 @@
           <span class="manual-num">1</span>
           <div class="manual-body">
             <h3>ONE MATCH, TWO PHONES</h3>
-            <p>One trainer taps NEW MATCH. The other scans the QR on the lobby screen, or types the 5-letter code. Both phones then show the same battle, so nobody has to trust a scoreboard.</p>
+            <p>One trainer taps NEW MATCH. The other scans the QR on the lobby screen, or types the 5-letter code. Both phones then show the same battle.</p>
           </div>
         </div>
 
         <div class="manual-step">
           <span class="manual-num">2</span>
           <div class="manual-body">
-            <h3>TAKE TURNS</h3>
-            <p>Tap a move. It costs 1 PP and drops your rival's HP, then it's their turn. The badge in the top corner tells you whose turn it is.</p>
+            <h3>LOADOUTS, APPROVED</h3>
+            <p>Before the fight each trainer picks a type and exactly <b>six moves</b> from that type's eight. Lock it in, and your rival has to <b>APPROVE</b> it. Both approvals and the battle starts — no default decks.</p>
           </div>
         </div>
 
         <div class="manual-step">
           <span class="manual-num">3</span>
           <div class="manual-body">
-            <h3>TYPES BEAT EACH OTHER</h3>
-            <p>STUDY › LECTURE › GYM › COMMUTE › SOCIAL › STUDY. Beating a type is 1.5×, and 2.25× if they already have a status. A resisted hit is 0.75×.</p>
+            <h3>BOTH ACT EVERY ROUND</h3>
+            <p>Nobody waits a turn. Both trainers lock in one move, and the round fires the moment the second pick lands. First strike alternates each round.</p>
           </div>
         </div>
 
         <div class="manual-step">
           <span class="manual-num">4</span>
           <div class="manual-body">
-            <h3>STATUS AND PP</h3>
-            <p>PARALYSED, BURNOUT, SNOOZE and DOOMSCROLL all bite: lost turns, -5 HP a turn, or -4 HP a turn. SU BAR DECOMP cures everything. Run a move dry and you get a second wind.</p>
+            <h3>FOUR HABITS, ONE WHEEL</h3>
+            <p>STUDY › LECTURE › GYM › SOCIAL › STUDY. Beating a type is 1.5×, and 2.25× if they already have a status. A resisted hit is 0.75×.</p>
           </div>
         </div>
 
         <div class="manual-step">
           <span class="manual-num">5</span>
           <div class="manual-body">
-            <h3>CALLING CAP · 3 PER MATCH</h3>
-            <p>Think your rival faked a habit? Tap <b>CALL CAP</b>. They have to <b>show proof</b> with the camera, or <b>take the hit</b>: -25 HP and a FRAUD flag.</p>
-            <p>If the proof lands, the call backfires — you lose 15 HP instead. No jury, no votes: screenshot or it didn't happen.</p>
+            <h3>STATUS AND PP</h3>
+            <p>PARALYSED and SNOOZE can eat your move, BURNOUT bites for 5 HP a round, DOOMSCROLL for 4. Some moves cure you. Run every move dry and you get a second wind.</p>
           </div>
         </div>
 
         <div class="manual-step">
           <span class="manual-num">6</span>
           <div class="manual-body">
-            <h3>CAM PROOF</h3>
-            <p><b>CAM PROOF</b> opens the Game Boy camera and shoots 160×144. Point it at the actual evidence: your habit tracker, your notes app, the treadmill screen. The photo lands in the room for both phones.</p>
+            <h3>CALLING CAP · 3 PER MATCH</h3>
+            <p>Think your rival faked a habit? Tap <b>CALL CAP</b>. They either <b>show a photo</b> or <b>take the hit</b>: -25 HP and a FRAUD flag, plus 2 🪙 to you.</p>
+            <p>Nothing verifies a photo. You judge it: accept it and you pay 1 🪙, or reject it and the call stands.</p>
           </div>
         </div>
 
         <div class="manual-step">
           <span class="manual-num">7</span>
           <div class="manual-body">
-            <h3>FOCUS DUEL</h3>
-            <p>Both phones get a button. Wait for <b>TAP NOW!</b> then hit it. The slower trainer takes 12 HP and falls asleep.</p>
+            <h3>CAM PROOF ONLY ANSWERS A CAP</h3>
+            <p><b>SHOW PROOF</b> is the only thing that opens the Game Boy camera, and only while someone is calling cap on you. No photo, no cap, no camera — that is the whole verification system.</p>
           </div>
         </div>
 
         <div class="manual-step">
           <span class="manual-num">8</span>
           <div class="manual-body">
-            <h3>PRINTER</h3>
-            <p>Prints the match as a Game Boy receipt PNG, token ledger included. Straight to the group chat.</p>
+            <h3>FOCUS DUEL · ONCE PER MATCH</h3>
+            <p>Both phones light up on their own. Wait for <b>TAP NOW!</b> then hit it. The slower trainer takes 12 HP and falls asleep.</p>
           </div>
         </div>
 
         <div class="manual-step">
           <span class="manual-num">9</span>
           <div class="manual-body">
-            <h3>THE WAGER · 10 🪙 EACH</h3>
-            <p>Both trainers start with 10 🪙 and ante 1, 3 or 5 into the Match Pot. A <b>LOCKED IN</b> combo steals 1 🪙 off your rival, a busted cap costs the liar 2 🪙, a false call costs you 1 🪙, and every doomscroll tax drops 1 🪙 into the pot.</p>
-            <p>Knock them out and you sweep the pot. Hit 0 and you are <b>BANKRUPT</b>: no cap calls left to make. Not real money, just shame.</p>
+            <h3>THE WALLET · 50 🪙 ON THIS DEVICE</h3>
+            <p>You start with 50 🪙 and the balance lives on your phone, so it is still there next time. Both sides ante 1, 3 or 5 into the Match Pot; a <b>LOCKED IN</b> combo steals 1 🪙, a busted cap costs the liar 2, a wrong call costs the accuser 1.</p>
+            <p>Knock them out and you sweep the pot. Hit 0 and you are <b>BANKRUPT</b>: no cap calls left. Every battle is written to BATTLE HISTORY on the title screen. Not real money, just shame.</p>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <span class="manual-num">10</span>
+          <div class="manual-body">
+            <h3>REMATCH AND THE PRINTER</h3>
+            <p>REMATCH only fires when <b>both</b> trainers tap it. The printer turns the match into a Game Boy receipt PNG, token ledger included.</p>
           </div>
         </div>
       </div>
@@ -167,7 +177,22 @@
     </section>
 
     <!-- ==================================================================
-         3. LOBBY
+         3. BATTLE HISTORY — saved on this device
+         ================================================================== -->
+    <section class="layer" id="layer-history">
+      <p class="tag">SAVED ON THIS DEVICE</p>
+      <h2 class="layer-title">BATTLE HISTORY</h2>
+
+      <div class="panel hist-panel">
+        <p class="hist-summary" id="hist-summary">…</p>
+        <div class="hist-list" id="hist-list"></div>
+      </div>
+
+      <button class="btn btn-block" id="btn-history-back" type="button">◀ BACK</button>
+    </section>
+
+    <!-- ==================================================================
+         4. LOBBY
          ================================================================== -->
     <section class="layer" id="layer-lobby">
       <p class="tag">MATCH LOBBY</p>
@@ -186,8 +211,30 @@
         <div class="slot"><span class="slot-dot" id="slot-b-dot"></span><span id="slot-b-name">waiting…</span></div>
       </div>
 
+      <div class="loadout" id="loadout">
+        <p class="ld-title">YOUR LOADOUT</p>
+        <div class="types" id="loadout-types" role="group" aria-label="Loadout type">
+          <button class="type-btn is-active" type="button" data-type="STUDY">STUDY</button>
+          <button class="type-btn" type="button" data-type="LECTURE">LECTURE</button>
+          <button class="type-btn" type="button" data-type="GYM">GYM</button>
+          <button class="type-btn" type="button" data-type="SOCIAL">SOCIAL</button>
+        </div>
+        <p class="ld-count" id="ld-count">PICK 6 MOVES · 0/6</p>
+        <div class="ld-moves" id="ld-moves"><!-- eight moves per type, injected by game.js --></div>
+        <button class="btn btn-primary btn-block" id="btn-lock" type="button">🔒 LOCK LOADOUT</button>
+        <p class="hint" id="ld-status">SIX MOVES. NO MORE, NO LESS.</p>
+
+        <div class="ld-review" id="ld-review" hidden>
+          <p class="ld-title">RIVAL LOADOUT · APPROVE IT</p>
+          <p class="ld-rival" id="ld-rival">—</p>
+          <div class="lobby-actions">
+            <button class="btn btn-good" id="btn-approve" type="button">APPROVE LOADOUT</button>
+            <button class="btn btn-bad" id="btn-reject" type="button">REJECT</button>
+          </div>
+        </div>
+      </div>
+
       <div class="lobby-actions">
-        <button class="btn btn-primary btn-block" id="btn-begin" type="button" disabled>▶ BEGIN BATTLE</button>
         <button class="btn" id="btn-copy" type="button">COPY INVITE</button>
         <button class="btn" id="btn-solo" type="button">SOLO DEMO</button>
         <button class="btn btn-quiet" id="btn-leave" type="button">QUIT</button>
@@ -197,14 +244,14 @@
     </section>
 
     <!-- ==================================================================
-         3. BATTLE — the Game Boy
+         5. BATTLE — the Game Boy
          ================================================================== -->
     <section class="layer" id="layer-battle">
       <div class="device">
         <div class="device-top">
           <span class="device-brand">HABIT FIGHTER</span>
           <span class="device-room" id="device-room">ROOM —</span>
-          <span class="turnflag" id="turnflag">YOUR TURN</span>
+          <span class="turnflag" id="turnflag">ROUND 1 · PICK</span>
         </div>
 
         <div class="lcd" id="lcd">
@@ -242,7 +289,7 @@
           <div class="tokenbar" id="tokenbar">
             <div class="tok-cell">
               <span class="tok-who" id="tok-a-name">P1</span>
-              <span class="tok-amount" id="tok-a">10</span>
+              <span class="tok-amount" id="tok-a">50</span>
               <span class="tok-unit">🪙</span>
               <span class="bankrupt" id="bankrupt-a" hidden>BANKRUPT</span>
             </div>
@@ -253,7 +300,7 @@
             </div>
             <div class="tok-cell is-right">
               <span class="tok-who" id="tok-b-name">P2</span>
-              <span class="tok-amount" id="tok-b">10</span>
+              <span class="tok-amount" id="tok-b">50</span>
               <span class="tok-unit">🪙</span>
               <span class="bankrupt" id="bankrupt-b" hidden>BANKRUPT</span>
             </div>
@@ -296,16 +343,16 @@
           </div>
         </div>
 
-        <div class="moves" id="moves"><!-- move buttons injected by game.js --></div>
+        <div class="moves" id="moves"><!-- six chosen moves injected by game.js --></div>
 
         <div class="utils">
-          <button class="btn btn-sm" id="btn-proof" type="button">CAM PROOF</button>
+          <button class="btn btn-sm" id="btn-proof" type="button" disabled>CAM PROOF</button>
           <button class="btn btn-sm" id="btn-bluff" type="button">CALL CAP · <span id="bluff-count">3</span></button>
           <button class="btn btn-sm" id="btn-duel" type="button">FOCUS DUEL</button>
           <button class="btn btn-sm" id="btn-receipt" type="button">PRINTER</button>
         </div>
 
-        <p class="typechain" id="typechain">STUDY›LECTURE›GYM›COMMUTE›SOCIAL›STUDY</p>
+        <p class="typechain" id="typechain">STUDY›LECTURE›GYM›SOCIAL›STUDY</p>
 
         <button class="btn btn-primary btn-block btn-focus" id="btn-focus-tap" type="button" hidden>WAIT…</button>
         <button class="btn btn-block btn-rematch" id="btn-rematch" type="button" hidden>⟳ REMATCH</button>
@@ -325,11 +372,10 @@
           <button class="btn btn-sm" type="button" data-tok="lose">-1 TOKENS</button>
           <button class="btn btn-sm" type="button" data-tok="steal">LOCKED IN STEAL</button>
           <button class="btn btn-sm" type="button" data-tok="cap-guilty">CAP: GUILTY</button>
-          <button class="btn btn-sm" type="button" data-tok="cap-proof">CAP: PROOF</button>
-          <button class="btn btn-sm" type="button" data-tok="poison">POISON TAX</button>
+          <button class="btn btn-sm" type="button" data-tok="cap-legit">CAP: PROOF OK</button>
           <button class="btn btn-sm" type="button" data-tok="sweep">SWEEP POT</button>
           <button class="btn btn-sm" type="button" data-tok="bankrupt">GO BANKRUPT</button>
-          <button class="btn btn-sm" type="button" data-tok="reset">RESET TOKENS</button>
+          <button class="btn btn-sm" type="button" data-tok="reset">RESET TO 50</button>
           <button class="btn btn-sm" type="button" data-tok="ko">KO RIVAL</button>
         </div>
       </div>
@@ -367,7 +413,7 @@
     </div>
   </div>
 
-  <!-- Call cap: head to head, no jury -->
+  <!-- Call cap: the accuser judges, nothing is verified automatically -->
   <div class="overlay" id="cap" hidden>
     <div class="modal">
       <div class="modal-head">
@@ -377,12 +423,14 @@
       <p class="jury-sub" id="cap-sub">Prove it or take the hit.</p>
       <div class="jury-photo" id="cap-photo">
         <img id="cap-img" alt="Proof of the habit">
-        <p class="jury-nophoto">NO PROOF YET</p>
+        <p class="jury-nophoto">NO PHOTO YET</p>
       </div>
       <div class="modal-actions">
-        <button class="btn btn-primary" id="btn-cap-proof" type="button">SHOW PROOF</button>
-        <button class="btn btn-bad" id="btn-cap-concede" type="button">TAKE THE HIT -25</button>
-        <button class="btn btn-quiet" id="btn-cap-cancel" type="button">DROP THE CALL</button>
+        <button class="btn btn-primary" id="btn-cap-proof" type="button" hidden>SHOW PROOF</button>
+        <button class="btn btn-bad" id="btn-cap-hit" type="button" hidden>TAKE THE HIT -25</button>
+        <button class="btn btn-good" id="btn-cap-accept" type="button" hidden>ACCEPT PROOF -1 🪙</button>
+        <button class="btn btn-bad" id="btn-cap-reject" type="button" hidden>REJECT &amp; PUNISH</button>
+        <button class="btn btn-quiet" id="btn-cap-cancel" type="button" hidden>DROP THE CALL</button>
       </div>
       <p class="hint" id="cap-hint"></p>
     </div>
@@ -412,6 +460,7 @@
   <script src="static/ui.js"></script>
   <script src="static/firebase.js"></script>
   <script src="static/camera.js"></script>
+  <script src="static/moves.js"></script>
   <script src="static/receipt.js"></script>
   <script src="static/game.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" defer></script>

@@ -41,13 +41,14 @@ window.HF = window.HF || {};
 
   const signed = (n) => (n > 0 ? '+' : '') + n;
 
-  /** Retro flavour for the final wallet. 0 is a very bad place to be. */
-  function tokenVerdict(tokens) {
+  /** Retro flavour for the night's net swing. 0 is a very bad place to be. */
+  function tokenVerdict(net, tokens) {
+    if (HF.verdict) return HF.verdict(net, tokens);
     if (tokens <= 0) return 'GENERATIONAL DEBT';
-    if (tokens >= 15) return 'HABIT TYCOON';
-    if (tokens >= 12) return 'COMPOUND INTEREST';
-    if (tokens >= 10) return 'SOLVENT';
-    if (tokens >= 6) return 'BREAKING EVEN';
+    if (net >= 15) return 'HABIT TYCOON';
+    if (net >= 8) return 'COMPOUND INTEREST';
+    if (net > 0) return 'IN THE GREEN';
+    if (net === 0) return 'EXACTLY EVEN';
     return 'IN THE RED';
   }
 
@@ -59,8 +60,9 @@ window.HF = window.HF || {};
       const foe = match[seat === 'a' ? 'b' : 'a'] || {};
       const won = match.zone === 'over' && match.winner === seat;
       const tok = me.tok || {};
-      const tokens = me.tokens == null ? 10 : me.tokens;
-      const START = 10;
+      const tokens = me.tokens == null ? 0 : me.tokens;
+      const START = me.startTokens == null ? tokens : me.startTokens;
+      const net = tokens - START;
 
       const paper = $('receipt-paper');
       paper.innerHTML = `
@@ -83,15 +85,15 @@ window.HF = window.HF || {};
         ${row('STATUS', me.status && me.status !== 'none' ? me.status : 'CLEAN')}
         <hr>
         <p class="r-sub">TOKEN LEDGER</p>
+        ${row('LOADOUT', (me.moves || []).length + ' MOVES · ' + (me.type || '—'))}
         ${row('STARTING', START + ' 🪙')}
         ${row('ANTE PAID', signed(tok.ante || 0) + ' 🪙')}
         ${row('LOCKED IN COMBOS', signed(tok.combo || 0) + ' 🪙')}
         ${row('CAP VERDICTS', signed(tok.cap || 0) + ' 🪙')}
-        ${row('POISON TAX', signed(tok.tax || 0) + ' 🪙')}
         ${row('MATCH POT WON', signed(tok.pot || 0) + ' 🪙')}
         ${row('FINAL BALANCE', tokens + ' 🪙')}
-        ${row('NET', signed(tokens - START) + ' 🪙')}
-        <p class="r-win">${esc(tokenVerdict(tokens))}</p>
+        ${row('NET', signed(net) + ' 🪙')}
+        <p class="r-win">${esc(tokenVerdict(net, tokens))}</p>
         <hr>
         <p class="r-sub">THANKS FOR PLAYING</p>
         <div class="r-barcode">${barcode(match.code || 'x')}</div>
