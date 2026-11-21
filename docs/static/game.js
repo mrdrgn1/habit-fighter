@@ -1919,7 +1919,12 @@ window.HF = window.HF || {};
     if (last && lastSeat) {
       HF.net.read(last)
         .then((match) => {
-          if (!match || !match[lastSeat]) {
+          // Rooms from before loadouts existed cannot be played on this build.
+          if (!match || !match[lastSeat] || !match.loadout) {
+            if (match) {
+              try { localStorage.removeItem('hf:last'); } catch (err) { /* private mode */ }
+              sessionStorage.removeItem('hf:seat:' + last);
+            }
             go('title');
             return;
           }
