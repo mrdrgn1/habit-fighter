@@ -838,7 +838,7 @@ window.HF = window.HF || {};
         leaveBtn.classList.remove('is-armed');
         leaveBtn.textContent = '◀ EXIT TO TITLE';
       } else if (!leaveArmed) {
-        leaveBtn.textContent = `LEAVE · -${LEAVE_FINE} 🪙`;
+        leaveBtn.textContent = `LEAVE · FORFEIT POT + ${LEAVE_FINE} 🪙`;
       }
     }
 
@@ -1603,12 +1603,12 @@ window.HF = window.HF || {};
     if (!leaveArmed) {
       leaveArmed = true;
       btn.classList.add('is-armed');
-      btn.textContent = `TAP AGAIN · FORFEIT -${LEAVE_FINE} 🪙`;
+      btn.textContent = `TAP AGAIN · LOSE POT + ${LEAVE_FINE} 🪙`;
       clearTimeout(leaveTimer);
       leaveTimer = setTimeout(() => {
         leaveArmed = false;
         btn.classList.remove('is-armed');
-        btn.textContent = `LEAVE · -${LEAVE_FINE} 🪙`;
+        btn.textContent = `LEAVE · FORFEIT POT + ${LEAVE_FINE} 🪙`;
       }, LEAVE_ARM_MS);
       HF.sound.play('select');
       return;
@@ -1617,7 +1617,7 @@ window.HF = window.HF || {};
     leaveArmed = false;
     clearTimeout(leaveTimer);
     btn.classList.remove('is-armed');
-    btn.textContent = `LEAVE · -${LEAVE_FINE} 🪙`;
+    btn.textContent = `LEAVE · FORFEIT POT + ${LEAVE_FINE} 🪙`;
 
     const foeSide = other(session.seat);
     if (!state[session.seat] || !state[foeSide]) return;
@@ -1626,23 +1626,26 @@ window.HF = window.HF || {};
       await publish((m) => {
         if (m.zone !== 'battle' || !m[session.seat] || !m[foeSide]) return;
         const me = m[session.seat];
-        transfer(m, session.seat, foeSide, LEAVE_FINE, {
-          category: 'leave',
-          log: `WALKOUT FINE — ${me.name} pays %n 🪙 to ${m[foeSide].name}.`,
-          tone: 'is-miss',
-        });
+        const rivalName = m[foeSide].name;
+        const potValue = m.pot || 0;
+        // Walking out forfeits the ante sitting in the pot and pays the fine on
+        // top of it. The rival collects both.
         m.zone = 'over';
         m.winner = foeSide;
         m.choices = { a: null, b: null };
-        pushLog(m, `${m[foeSide].name} WINS — ${me.name} LEFT THE MATCH.`, 'is-super');
-        transfer(m, 'pot', foeSide, m.pot, {
+        transfer(m, 'pot', foeSide, potValue, {
           category: 'pot',
-          log: `${m[foeSide].name} takes the pot: %n 🪙.`,
+          log: `FORFEITED POT — ${rivalName} takes the %n 🪙 pot.`,
           tone: 'is-super',
         });
-        checkFaint(m);
+        transfer(m, session.seat, foeSide, LEAVE_FINE, {
+          category: 'leave',
+          log: `WALKOUT FINE — ${me.name} pays %n 🪙 more to ${rivalName}.`,
+          tone: 'is-miss',
+        });
+        pushLog(m, `${rivalName} WINS — ${me.name} FORFEITED THE POT AND ${LEAVE_FINE} 🪙.`, 'is-super');
       });
-      HF.ui.toast(`FORFEITED · -${LEAVE_FINE} 🪙 · RIVAL TAKES THE MATCH`, true);
+      HF.ui.toast(`FORFEITED · POT + ${LEAVE_FINE} 🪙 TO RIVAL`, true);
       HF.sound.play('lose');
     } catch (err) {
       HF.ui.toast('COULD NOT LEAVE: ' + err.message, true);
