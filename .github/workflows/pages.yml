@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -21,9 +19,6 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,31 +27,25 @@ jobs:
       - name: Pull the game from the live deploy
         run: |
           set -euo pipefail
-          rm -rf public
-          mkdir -p public/static
-          curl -fsSL "$LIVE/" -o public/index.html
-          curl -fsSL "$LIVE/config.js" -o public/config.js
+          rm -rf docs
+          mkdir -p docs/static
+          curl -fsSL "$LIVE/" -o docs/index.html
+          curl -fsSL "$LIVE/config.js" -o docs/config.js
           for f in $STATIC_FILES; do
-            curl -fsSL "$LIVE/static/$f" -o "public/static/$f"
+            curl -fsSL "$LIVE/static/$f" -o "docs/static/$f"
           done
-          find public -type f | sort
+          touch docs/.nojekyll
+          find docs -type f | sort
 
-      - name: Keep the source in the repo
+      - name: Publish into docs/ (GitHub Pages serves this branch folder)
         run: |
           set -euo pipefail
           git config user.name "habit-fighter"
           git config user.email "actions@users.noreply.github.com"
-          git add -A public
+          git add -A docs
           if git diff --cached --quiet; then
             echo "already up to date"
           else
             git commit -m "Mirror the live build"
             git push
           fi
-
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-      - id: deployment
-        uses: actions/deploy-pages@v4
