@@ -1018,6 +1018,13 @@ window.HF = window.HF || {};
 
     $('btn-duel').disabled = match.zone !== 'battle' || match.duelUsed || !!(match.duel && match.duel.active) || capOpen;
 
+    // SKIP NOW only exists in the dev trial (solo) build.
+    const skipBtn = $('btn-skip');
+    if (skipBtn) {
+      skipBtn.hidden = !match.autoRival;
+      skipBtn.disabled = !myFocus || match.zone !== 'battle';
+    }
+
     maybeCapOverlay(match);
     renderDuel(match);
   }
@@ -1426,6 +1433,73 @@ window.HF = window.HF || {};
     });
     HF.ui.toast('LOADOUT REJECTED — THEY HAVE TO REBUILD', true);
     HF.sound.play('error');
+  }
+
+  /**
+   * DEV TRIAL: one tap, no lobby, no approvals. Builds a solo match with the
+   * demo clock already on and both loadouts accepted, so the stage demo is
+   * pick a move → SKIP NOW → damage.
+   */
+  async function startDevTrial() {
+    try {
+      const code = HF.net.newCode();
+      const type = TYPES.indexOf(session.pick.type) === -1 ? 'STUDY' : session.pick.type;
+      const match = newMatch(code, session.name, type, session.account.tokens);
+      match.ante = Math.min(Number(session.ante) || 3, session.account.tokens);
+      match.demo = true;
+      match.autoRival = true;
+      match.b = fighter('RIVAL', type, session.account.tokens);
+      match.loadout = {
+        a: { type, moves: defaultMoves(type), locked: true, approved: true, gen: 0 },
+        b: { type, moves: randomLoadout(type), locked: true, approved: true, gen: 0 },
+      };
+      pushLog(match, `${match.a.name} starts a DEV TRIAL — demo clock ON.`, 'is-system');
+      startBattle(match);
+      await HF.net.write(code, match);
+      session.seat = 'a';
+      session.code = code;
+      session.pick = { type, moves: match.loadout.a.moves.slice() };
+      session.recordedKey = null;
+      sessionStorage.setItem('hf:seat:' + code, 'a');
+      localStorage.setItem('hf:last', code);
+      HF.net.start(code, applyState);
+      applyState(match);
+      renderBattle(match);
+      HF.ui.toast('DEV TRIAL · DEMO CLOCK ON · TAP SKIP NOW');
+      HF.sound.play('join');
+    } catch (err) {
+      HF.ui.toast('DEV TRIAL FAILED: ' + err.message, true);
+    }
+  }
+
+  /**
+   * SKIP NOW: end the running session this instant and cash the hit in. In solo
+   * mode it also settles the rival's session, so one tap always shows damage.
+   */
+  async function skipNow() {
+    if (!state || state.zone !== 'battle') return;
+    const foeSide = other(session.seat);
+    const mine = state.focus && state.focus[session.seat];
+    const theirs = state.focus && state.focus[foeSide];
+    if (!mine && !(state.autoRival && theirs)) {
+      HF.ui.toast('NO SESSION RUNNING — PICK A MOVE FIRST', true);
+      return;
+    }
+    try {
+      await publish((m) => {
+        if (m.zone !== 'battle') return;
+        if (m.focus[session.seat]) m.focus[session.seat].endAt = Date.now() - 1;
+        if (m.autoRival && m.focus[foeSide]) m.focus[foeSide].endAt = Date.now() - 1;
+        const own = resolveSession(m, session.seat);
+        if (own) own.forEach((name) => HF.sound.play(name));
+        if (m.autoRival) resolveSession(m, foeSide);
+      });
+      HF.ui.shake();
+      HF.ui.toast('SESSION SKIPPED — HIT LANDED');
+      maybeAutoPlay();
+    } catch (err) {
+      HF.ui.toast('SKIP FAILED: ' + err.message, true);
+    }
   }
 
   async function startSolo() {
@@ -2152,6 +2226,7 @@ window.HF = window.HF || {};
     $('btn-match-type').addEventListener('click', matchRivalType);
 
     $('btn-create').addEventListener('click', createMatch);
+    $('btn-dev-trial').addEventListener('click', startDevTrial);
     $('btn-howto').addEventListener('click', () => {
       HF.sound.play('select');
       go('howto');
@@ -2176,6 +2251,8 @@ window.HF = window.HF || {};
     });
 
     $('btn-solo').addEventListener('click', startSolo);
+    $('btn-dev-trial').addEventListener('click', startDevTrial);
+    $('btn-skip').addEventListener('click', skipNow);
     $('btn-leave').addEventListener('click', quitToTitle);
     $('btn-leave-match').addEventListener('click', leaveMatch);
     $('btn-copy').addEventListener('click', async () => {
