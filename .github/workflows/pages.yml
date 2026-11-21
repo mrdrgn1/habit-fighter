@@ -54,6 +54,8 @@ jobs:
             mkdir -p docs/static
             from_repo
           fi
+          # The camera-capture page only exists in the repo, not on the hosted build.
+          cp public/cam.html docs/cam.html
           touch docs/.nojekyll
           find docs -type f | sort
 
