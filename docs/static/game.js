@@ -23,6 +23,8 @@ window.HF = window.HF || {};
   const CAP_FINE = 2;        // a caught liar pays the accuser
   const FALSE_CALL_FINE = 1; // a wrong call pays the accused
   const DUEL_DMG = 12;
+  const LEAVE_FINE = 2;      // walking out mid-match pays the rival
+  const LEAVE_ARM_MS = 4000; // first tap only arms the button
   const HISTORY_MAX = 30;
   const ACCOUNT_KEY = 'hf:account';
   const ACCOUNT_START = 50;
@@ -64,6 +66,8 @@ window.HF = window.HF || {};
   let focusTimer = null;
   let builtKey = '';
   let pickerType = '';
+  let leaveArmed = false;
+  let leaveTimer = null;
 
   const other = (side) => (side === 'a' ? 'b' : 'a');
   const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => (
@@ -233,7 +237,7 @@ window.HF = window.HF || {};
       tokens: wallet,
       startTokens: wallet,
       // signed per-category tally so the receipt can show where tokens went
-      tok: { combo: 0, cap: 0, ante: 0, pot: 0 },
+      tok: { combo: 0, cap: 0, ante: 0, pot: 0, leave: 0 },
     };
   }
 
@@ -253,6 +257,7 @@ window.HF = window.HF || {};
       updatedAt: now,
       lastActAt: now,
       battleNo: 0,
+      loadoutGen: 0,
       zone: 'lobby',
       round: 1,
       winner: null,
@@ -348,7 +353,7 @@ window.HF = window.HF || {};
       if (!f) return;
       const load = m.loadout && m.loadout[side];
       f.startTokens = Math.max(0, f.tokens || 0);
-      f.tok = { combo: 0, cap: 0, ante: 0, pot: 0 };
+      f.tok = { combo: 0, cap: 0, ante: 0, pot: 0, leave: 0 };
       f.hp = f.maxHp || MAX_HP;
       f.status = 'none';
       f.statusTurns = 0;
@@ -689,7 +694,8 @@ window.HF = window.HF || {};
     wrap.innerHTML = pool.map((move) => (
       `<button class="btn mv-pick" type="button" data-mv="${move.id}">
         <span class="mv-name">${move.name}</span>
-        <span class="mv-meta">PP ${move.pp} · ${move.note}</span>
+        <span class="mv-meta">PP ${move.pp} · ${move.power ? move.power + ' POWER' : 'SUPPORT'}</span>
+        <span class="mv-desc">${move.desc || move.note}</span>
       </button>`
     )).join('');
   }
@@ -701,7 +707,9 @@ window.HF = window.HF || {};
     if (!session.pick.type || TYPES.indexOf(session.pick.type) === -1) {
       session.pick.type = session.type || 'STUDY';
     }
-    if (mine) {
+    // Only a locked loadout is authoritative; while it is editable the pick is
+    // local, otherwise the poll would undo every type change.
+    if (mine && mine.locked) {
       session.pick.type = mine.type;
       session.pick.moves = mine.moves.slice();
     }
@@ -809,6 +817,31 @@ window.HF = window.HF || {};
 
     HF.ui.setText((match.log || []).slice(-3));
 
+    const hint = $('battle-hint');
+    if (hint) {
+      if (match.zone === 'over') {
+        hint.textContent = 'MATCH OVER — REMATCH, OR LEAVE FOR GOOD';
+      } else if (capOpen) {
+        hint.textContent = 'CAP CALL OPEN — NO MOVES UNTIL IT SETTLES';
+      } else if (match.choices && match.choices[session.seat]) {
+        const picked = moveById(match.choices[session.seat]);
+        hint.textContent = `✓ ${picked ? picked.name : 'MOVE'} LOCKED — TAP ANOTHER MOVE TO SWAP IT`;
+      } else {
+        hint.textContent = 'BOTH TRAINERS PICK — FIRST STRIKE ALTERNATES EACH ROUND';
+      }
+    }
+
+    const leaveBtn = $('btn-leave-match');
+    if (leaveBtn) {
+      if (match.zone === 'over') {
+        leaveArmed = false;
+        leaveBtn.classList.remove('is-armed');
+        leaveBtn.textContent = '◀ EXIT TO TITLE';
+      } else if (!leaveArmed) {
+        leaveBtn.textContent = `LEAVE · -${LEAVE_FINE} 🪙`;
+      }
+    }
+
     renderMoves(match);
     renderProof(match, me);
     renderTokens(match);
@@ -876,7 +909,8 @@ window.HF = window.HF || {};
     const me = match[session.seat];
     const capOpen = !!(match.cap && match.cap.active);
     const chosen = !!(match.choices && match.choices[session.seat]);
-    const canAct = match.zone === 'battle' && !capOpen && !chosen;
+    // A locked pick can still be swapped, so a tap always does something.
+    const canAct = match.zone === 'battle' && !capOpen;
 
     const ids = (me && me.moves && me.moves.length) ? me.moves : defaultMoves(me ? me.type : 'STUDY');
     const key = ids.join(',');
@@ -1101,9 +1135,14 @@ window.HF = window.HF || {};
     }
   }
 
+  /** Both loadouts must be locked and approved *for the current generation*,
+   *  so a stale approval from last match can never restart the battle. */
   function readyToFight(m) {
     const L = m.loadout || {};
-    return !!(L.a && L.b && L.a.locked && L.b.locked && L.a.approved && L.b.approved);
+    const gen = m.loadoutGen || 0;
+    if (!L.a || !L.b) return false;
+    return !!(L.a.locked && L.b.locked && L.a.approved && L.b.approved &&
+      (L.a.gen || 0) === gen && (L.b.gen || 0) === gen);
   }
 
   async function lockLoadout() {
@@ -1122,13 +1161,18 @@ window.HF = window.HF || {};
         moves,
         locked: true,
         approved: false,
+        gen: m.loadoutGen || 0,
       };
       m[session.seat].type = type;
       pushLog(m, `${m[session.seat].name} locked a ${type} loadout.`, 'is-system');
       if (m.autoRival && session.seat === 'a') {
         // One person playing both seats: approve instantly.
         m.loadout.a.approved = true;
-        if (m.loadout.b) m.loadout.b.approved = true;
+        if (m.loadout.b) {
+          m.loadout.b.approved = true;
+          m.loadout.b.locked = true;
+          m.loadout.b.gen = m.loadoutGen || 0;
+        }
       }
       if (readyToFight(m)) startBattle(m);
     });
@@ -1180,6 +1224,7 @@ window.HF = window.HF || {};
         moves: randomLoadout(type),
         locked: true,
         approved: true,
+        gen: m.loadoutGen || 0,
       };
       pushLog(m, `SOLO DEMO — ${m[foeSide].name} (${type}) steps up. AUTO-RIVAL ON.`, 'is-system');
     });
@@ -1197,10 +1242,6 @@ window.HF = window.HF || {};
       HF.ui.toast('SETTLE THE CAP CALL FIRST', true);
       return;
     }
-    if (state.choices && state.choices[session.seat]) {
-      HF.ui.toast('MOVE ALREADY LOCKED — WAITING FOR RIVAL');
-      return;
-    }
     const me = state[session.seat];
     const move = moveById(moveId);
     if (!me || !move) return;
@@ -1211,17 +1252,24 @@ window.HF = window.HF || {};
       return;
     }
 
+    const round = state.round || 1;
+    const swapping = !!(state.choices && state.choices[session.seat]);
     busy = true;
     const events = [];
     try {
-      await publish((m) => {
+      const next = await publish((m) => {
         if (m.zone !== 'battle') return;
+        if ((m.round || 1) !== round) return; // a late tap must not reopen a finished round
         if (m.cap && m.cap.active) return;
-        if (m.choices[session.seat]) return;
         m.choices[session.seat] = moveId;
-        pushLog(m, `${m[session.seat].name} locks in ${move.name}.`, 'is-system');
+        pushLog(m, swapping
+          ? `${m[session.seat].name} swaps to ${move.name}.`
+          : `${m[session.seat].name} locks in ${move.name}.`, 'is-system');
         if (m.choices.a && m.choices.b) resolveRound(m, events);
       });
+      if (next && (next.round || 1) !== round) {
+        HF.ui.toast('THAT ROUND ALREADY RESOLVED — PICK FOR THE NEW ONE');
+      }
       events.forEach((name) => HF.sound.play(name));
       if (events.indexOf('hit') !== -1 || events.indexOf('super') !== -1) {
         HF.ui.hitSprite('foe');
@@ -1485,6 +1533,26 @@ window.HF = window.HF || {};
 
   /* ---------------------------------------------------------------- rematch */
 
+  /** Both agreed: back to the lobby so types and moves can change (and be re-approved). */
+  function openRematchLobby(m) {
+    m.zone = 'lobby';
+    m.winner = null;
+    m.rematch = { a: false, b: false };
+    m.choices = { a: null, b: null };
+    m.proof = null;
+    m.cap = freshCap();
+    m.duel = freshDuel();
+    m.log = [];
+    m.loadoutGen = (m.loadoutGen || 0) + 1;
+    ['a', 'b'].forEach((side) => {
+      const load = m.loadout && m.loadout[side];
+      if (!load) return;
+      load.locked = false;
+      load.approved = false;
+    });
+    pushLog(m, 'REMATCH — both agreed. Change your type and moves, then lock again.', 'is-system');
+  }
+
   async function rematch() {
     if (!state || state.zone !== 'over') return;
     await publish((m) => {
@@ -1495,17 +1563,89 @@ window.HF = window.HF || {};
       const votes = (m.rematch.a ? 1 : 0) + (m.rematch.b ? 1 : 0);
       pushLog(m, `${m[session.seat].name} wants a rematch (${votes}/2).`, 'is-system');
 
-      if (m.rematch.a && m.rematch.b) {
-        m.zone = 'battle';
-        m.log = [];
-        pushLog(m, 'REMATCH — both trainers agreed. Same loadouts, fresh HP.', 'is-system');
-        openBattle(m);
-      }
+      if (m.rematch.a && m.rematch.b) openRematchLobby(m);
     });
     HF.sound.play('join');
-    if (state.zone === 'battle') {
-      HF.ui.reviveSprites();
-      session.recordedKey = null;
+    HF.ui.reviveSprites();
+    session.recordedKey = null;
+  }
+
+  /* ------------------------------------------------------------ leave/forfeit */
+
+  function quitToTitle() {
+    if (state && state[session.seat] && state.zone === 'battle') {
+      session.account.tokens = Math.max(0, state[session.seat].tokens || 0);
+      saveAccount();
+    }
+    HF.net.stop();
+    session.code = null;
+    session.seat = null;
+    state = null;
+    builtKey = '';
+    leaveArmed = false;
+    clearTimeout(leaveTimer);
+    go('title');
+    renderAccountLine();
+  }
+
+  /**
+   * Two taps: the first arms the button, the second forfeits. The walker pays
+   * the fine, the rival takes the match and the pot.
+   */
+  async function leaveMatch() {
+    if (!state) return;
+    if (state.zone === 'over') {
+      quitToTitle();
+      return;
+    }
+
+    const btn = $('btn-leave-match');
+    if (!leaveArmed) {
+      leaveArmed = true;
+      btn.classList.add('is-armed');
+      btn.textContent = `TAP AGAIN · FORFEIT -${LEAVE_FINE} 🪙`;
+      clearTimeout(leaveTimer);
+      leaveTimer = setTimeout(() => {
+        leaveArmed = false;
+        btn.classList.remove('is-armed');
+        btn.textContent = `LEAVE · -${LEAVE_FINE} 🪙`;
+      }, LEAVE_ARM_MS);
+      HF.sound.play('select');
+      return;
+    }
+
+    leaveArmed = false;
+    clearTimeout(leaveTimer);
+    btn.classList.remove('is-armed');
+    btn.textContent = `LEAVE · -${LEAVE_FINE} 🪙`;
+
+    const foeSide = other(session.seat);
+    if (!state[session.seat] || !state[foeSide]) return;
+
+    try {
+      await publish((m) => {
+        if (m.zone !== 'battle' || !m[session.seat] || !m[foeSide]) return;
+        const me = m[session.seat];
+        transfer(m, session.seat, foeSide, LEAVE_FINE, {
+          category: 'leave',
+          log: `WALKOUT FINE — ${me.name} pays %n 🪙 to ${m[foeSide].name}.`,
+          tone: 'is-miss',
+        });
+        m.zone = 'over';
+        m.winner = foeSide;
+        m.choices = { a: null, b: null };
+        pushLog(m, `${m[foeSide].name} WINS — ${me.name} LEFT THE MATCH.`, 'is-super');
+        transfer(m, 'pot', foeSide, m.pot, {
+          category: 'pot',
+          log: `${m[foeSide].name} takes the pot: %n 🪙.`,
+          tone: 'is-super',
+        });
+        checkFaint(m);
+      });
+      HF.ui.toast(`FORFEITED · -${LEAVE_FINE} 🪙 · RIVAL TAKES THE MATCH`, true);
+      HF.sound.play('lose');
+    } catch (err) {
+      HF.ui.toast('COULD NOT LEAVE: ' + err.message, true);
     }
   }
 
@@ -1567,8 +1707,14 @@ window.HF = window.HF || {};
 
   function maybeAutoPlay() {
     if (!state || !state.autoRival || session.seat !== 'a') return;
-    if (state.zone !== 'battle' && state.zone !== 'over') return;
+    if (state.zone !== 'battle' && state.zone !== 'over' && state.zone !== 'lobby') return;
     if (busy) return;
+
+    if (state.zone === 'lobby') {
+      const L = state.loadout || {};
+      if (L.b && !L.b.locked && !autoTimer) autoTimer = setTimeout(autoLockRival, 1200);
+      return;
+    }
 
     if (state.zone === 'over') {
       if (state.rematch && state.rematch.a && !state.rematch.b && !autoTimer) {
@@ -1589,6 +1735,26 @@ window.HF = window.HF || {};
     }
     if (state.choices && !state.choices.b) {
       if (!autoTimer) autoTimer = setTimeout(autoPick, 1400);
+    }
+  }
+
+  /** Solo demo: after a rematch the fake rival rebuilds its loadout by itself. */
+  async function autoLockRival() {
+    autoTimer = null;
+    if (!state || state.zone !== 'lobby' || !state.autoRival) return;
+    busy = true;
+    try {
+      await publish((m) => {
+        if (m.zone !== 'lobby' || !m.loadout || !m.loadout.b) return;
+        m.loadout.b.locked = true;
+        m.loadout.b.approved = true;
+        m.loadout.b.gen = m.loadoutGen || 0;
+        if (readyToFight(m)) startBattle(m);
+      });
+    } catch (err) {
+      /* the next poll retries */
+    } finally {
+      busy = false;
     }
   }
 
@@ -1647,12 +1813,9 @@ window.HF = window.HF || {};
     try {
       await publish((m) => {
         if (m.zone !== 'over') return;
+        m.rematch = m.rematch || { a: false, b: false };
         m.rematch.b = true;
-        pushLog(m, 'RIVAL ACCEPTS THE REMATCH.', 'is-system');
-        m.zone = 'battle';
-        m.log = [];
-        pushLog(m, 'REMATCH — both trainers agreed. Fresh HP.', 'is-system');
-        openBattle(m);
+        if (m.rematch.a) openRematchLobby(m);
       });
       HF.ui.reviveSprites();
       session.recordedKey = null;
@@ -1775,20 +1938,8 @@ window.HF = window.HF || {};
     });
 
     $('btn-solo').addEventListener('click', startSolo);
-    $('btn-leave').addEventListener('click', () => {
-      // Keep the wallet honest when someone walks away mid-match.
-      if (state && state[session.seat] && state.zone === 'battle') {
-        session.account.tokens = Math.max(0, state[session.seat].tokens || 0);
-        saveAccount();
-      }
-      HF.net.stop();
-      session.code = null;
-      session.seat = null;
-      state = null;
-      builtKey = '';
-      go('title');
-      renderAccountLine();
-    });
+    $('btn-leave').addEventListener('click', quitToTitle);
+    $('btn-leave-match').addEventListener('click', leaveMatch);
     $('btn-copy').addEventListener('click', async () => {
       if (!state) return;
       const link = HF.net.inviteLink(state.code);

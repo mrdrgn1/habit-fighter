@@ -161,6 +161,7 @@
             <h3>THE WALLET · 50 🪙 ON THIS DEVICE</h3>
             <p>You start with 50 🪙 and the balance lives on your phone, so it is still there next time. Both sides ante 1, 3 or 5 into the Match Pot; a <b>LOCKED IN</b> combo steals 1 🪙, a busted cap costs the liar 2, a wrong call costs the accuser 1.</p>
             <p>Knock them out and you sweep the pot. Hit 0 and you are <b>BANKRUPT</b>: no cap calls left. Every battle is written to BATTLE HISTORY on the title screen. Not real money, just shame.</p>
+            <p>Walking out mid-match is a forfeit: tap <b>LEAVE</b> twice and you pay 2 🪙 to your rival, who takes the match and the pot.</p>
           </div>
         </div>
 
@@ -168,7 +169,7 @@
           <span class="manual-num">10</span>
           <div class="manual-body">
             <h3>REMATCH AND THE PRINTER</h3>
-            <p>REMATCH only fires when <b>both</b> trainers tap it. The printer turns the match into a Game Boy receipt PNG, token ledger included.</p>
+            <p>REMATCH only fires when <b>both</b> trainers tap it, and it drops you back to the loadout screen: change your type and picks if you want, then get approved again. The printer turns the match into a Game Boy receipt PNG, token ledger included.</p>
           </div>
         </div>
       </div>
@@ -344,12 +345,14 @@
         </div>
 
         <div class="moves" id="moves"><!-- six chosen moves injected by game.js --></div>
+        <p class="battle-hint" id="battle-hint">BOTH TRAINERS PICK — FIRST STRIKE ALTERNATES EACH ROUND</p>
 
         <div class="utils">
           <button class="btn btn-sm" id="btn-proof" type="button" disabled>CAM PROOF</button>
           <button class="btn btn-sm" id="btn-bluff" type="button">CALL CAP · <span id="bluff-count">3</span></button>
           <button class="btn btn-sm" id="btn-duel" type="button">FOCUS DUEL</button>
           <button class="btn btn-sm" id="btn-receipt" type="button">PRINTER</button>
+          <button class="btn btn-sm" id="btn-leave-match" type="button">LEAVE · -2 🪙</button>
         </div>
 
         <p class="typechain" id="typechain">STUDY›LECTURE›GYM›SOCIAL›STUDY</p>

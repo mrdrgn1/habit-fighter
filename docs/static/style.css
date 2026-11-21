@@ -887,10 +887,12 @@ img { max-width: 100%; display: block; }
 }
 .mv-pick .mv-name { display: block; font-size: 7.5px; color: var(--lcd); }
 .mv-pick .mv-meta { display: block; font-size: 6px; color: var(--dark); white-space: nowrap; }
+.mv-pick .mv-desc { display: block; font-size: 6px; line-height: 1.7; color: var(--mid); white-space: normal; }
 .mv-pick:hover:not(:disabled) { background: rgba(139, 172, 15, .14); }
 .mv-pick.is-picked { background: var(--mid); border-color: var(--ink); box-shadow: 2px 2px 0 var(--dark); }
 .mv-pick.is-picked .mv-name,
-.mv-pick.is-picked .mv-meta { color: var(--ink); }
+.mv-pick.is-picked .mv-meta,
+.mv-pick.is-picked .mv-desc { color: var(--ink); }
 .mv-pick:disabled { opacity: .35; }
 .ld-review {
   display: flex;
@@ -903,6 +905,23 @@ img { max-width: 100%; display: block; }
 .ld-rival { font-size: 7px; color: var(--lcd); line-height: 1.9; word-break: break-word; }
 
 .move-btn.is-picked { background: var(--mid); box-shadow: inset 0 0 0 2px var(--ink); }
+
+.battle-hint {
+  margin: 6px 0 0;
+  font-size: 6.5px;
+  line-height: 1.8;
+  text-align: center;
+  color: #3d3d35;
+  letter-spacing: .02em;
+}
+
+#btn-leave-match {
+  grid-column: 1 / -1;
+  background: #cfcdbb;
+  color: #5a2a1e;
+  box-shadow: 2px 2px 0 #7d7b6c;
+}
+#btn-leave-match.is-armed { background: #c46a4a; color: var(--ink); }
 
 .hist-panel { gap: 10px; }
 .hist-summary { font-size: 7.5px; color: var(--mid); line-height: 1.8; }

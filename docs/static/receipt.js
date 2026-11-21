@@ -90,6 +90,7 @@ window.HF = window.HF || {};
         ${row('ANTE PAID', signed(tok.ante || 0) + ' 🪙')}
         ${row('LOCKED IN COMBOS', signed(tok.combo || 0) + ' 🪙')}
         ${row('CAP VERDICTS', signed(tok.cap || 0) + ' 🪙')}
+        ${row('WALKOUT FINE', signed(tok.leave || 0) + ' 🪙')}
         ${row('MATCH POT WON', signed(tok.pot || 0) + ' 🪙')}
         ${row('FINAL BALANCE', tokens + ' 🪙')}
         ${row('NET', signed(net) + ' 🪙')}
