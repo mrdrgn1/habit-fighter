@@ -822,6 +822,33 @@ img { max-width: 100%; display: block; }
 .dev-title span { font-size: 6px; color: var(--dark); }
 .dev-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
 
+/* 15b. Focus clock: the session timers ----------------------------------- */
+.focusbar {
+  display: flex;
+  gap: 3px;
+  padding: 3px 0;
+  border-bottom: 2px solid var(--dark);
+  color: var(--ink);
+}
+.focus-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "who clock" "what clock";
+  align-items: center;
+  gap: 0 6px;
+  padding: 3px 4px;
+  border: 2px solid var(--dark);
+  background: var(--lcd);
+}
+.focus-cell.is-right { text-align: right; }
+.focus-who { grid-area: who; font-size: 5.4px; color: var(--dark); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.focus-what { grid-area: what; font-size: 5.6px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.focus-clock { grid-area: clock; font-size: 8px; color: var(--ink); white-space: nowrap; }
+.focus-clock.is-soon { padding: 1px 3px; color: var(--lcd); background: var(--ink); }
+#btn-match-type { margin-top: 6px; }
+
 /* 16. How to play -------------------------------------------------------- */
 .manual { gap: 12px; }
 .manual-step { display: flex; gap: 10px; align-items: flex-start; }

@@ -1,10 +1,12 @@
 /* ==========================================================================
-   moves.js  —  the type wheel and the move library.
+   moves.js  —  the two habits and their move (session) library.
 
-   Four types, four habits. Every type has its own eight moves, so a GYM
-   trainer never ends up throwing a library swing. Each trainer picks six of
-   their eight before the match and the rival has to approve the loadout.
-   `desc` is the plain-English line shown while picking.
+   Only STUDY and GYM exist, and both trainers must fight on the same type, so
+   a match is one habit versus the same habit. Every move is a real length of
+   work: 15 minutes of warm-up, a 2-hour library lock-in, a 6-hour all-nighter.
+   Damage comes straight out of that length — longer session, harder hit — so
+   the move list is a trade: big damage costs you hours you cannot pick again
+   until the timer runs out.
    ========================================================================== */
 
 window.HF = window.HF || {};
@@ -12,66 +14,116 @@ window.HF = window.HF || {};
 (function (HF) {
   'use strict';
 
-  /* Each type beats exactly one other: a four-step wheel, no dead ends. */
-  const TYPES = ['STUDY', 'LECTURE', 'GYM', 'SOCIAL'];
+  const TYPES = ['STUDY', 'GYM'];
 
-  const BEATS = {
-    STUDY: 'LECTURE',
-    LECTURE: 'GYM',
-    GYM: 'SOCIAL',
-    SOCIAL: 'STUDY',
-  };
+  /* Long work hits harder, but sub-linearly: 20 minutes is a jab, six hours
+     ends the argument. 20 → 17, 2 h → 37, 6 h → 61. */
+  const powerFor = (mins) => Math.round(4 + Math.sqrt(mins) * 3);
 
-  const POOLS = {
+  /** 90 → "1H 30M", 120 → "2H", 15 → "15M". Used on every button. */
+  function durLabel(mins) {
+    const m = Math.max(0, Math.round(Number(mins) || 0));
+    if (m < 60) return m + 'M';
+    const h = Math.floor(m / 60);
+    const rest = m % 60;
+    return rest ? `${h}H ${rest}M` : `${h}H`;
+  }
+
+  const RAW = {
     STUDY: [
-      { id: 'libgrind', name: 'MAUGHAN GRIND', power: 24, pp: 8, note: 'STEADY HIT', desc: 'Solid 24-power hit, 8 uses. Your bread and butter.' },
-      { id: 'allnighter', name: 'ALL-NIGHTER', power: 34, pp: 3, self: { status: 'SNOOZE' }, note: 'SNOOZES YOU', desc: 'Huge 34 power in 3 shots — but you wake up SNOOZED.' },
-      { id: 'flashcards', name: 'FLASHCARD DRILL', power: 18, pp: 10, note: 'CHEAP AND SAFE', desc: 'Only 18 power, but 10 uses. Save it for long fights.' },
-      { id: 'pastpaper', name: 'PAST PAPER RUN', power: 26, pp: 6, note: 'NO GIMMICKS', desc: '26 power, no side effects. Nothing fancy.' },
-      { id: 'wikihole', name: '3AM WIKI HOLE', power: 20, pp: 7, effect: { status: 'POISON', chance: 0.6 }, note: '60% DOOMSCROLL', desc: '20 power and a 60% chance to leave them DOOMSCROLLED (-4 HP a round).' },
-      { id: 'silentfloor', name: 'SILENT FLOOR', power: 0, pp: 5, heal: 14, note: 'HEALS 14', desc: 'No damage — heals you 14 HP instead.' },
-      { id: 'groupchat', name: 'GROUP CHAT GRIND', power: 22, pp: 7, effect: { status: 'PARALYSIS', chance: 0.4 }, note: '40% PARALYSED', desc: '22 power, 40% chance to PARALYSE them (they may lose a move).' },
-      { id: 'deadline', name: 'DEADLINE PANIC', power: 30, pp: 4, note: 'BIG HIT', desc: '30 power, 4 uses. Your finisher.' },
-    ],
-    LECTURE: [
-      { id: 'nineam', name: '9AM LECTURE', power: 26, pp: 7, note: 'RELIABLE', desc: '26 power, 7 uses. A reliable opener.' },
-      { id: 'slidedeck', name: 'SLIDE DECK SKIM', power: 20, pp: 9, effect: { status: 'BURNOUT', chance: 0.35 }, note: '35% BURNOUT', desc: '20 power, 35% chance to BURN them out (-5 HP a round).' },
-      { id: 'panopto', name: 'PANOPTO REWATCH', power: 0, pp: 5, heal: 12, cure: true, note: 'HEAL + CURE', desc: 'No damage — heals 12 HP and clears any status on you.' },
-      { id: 'handout', name: 'HANDOUT HOARD', power: 18, pp: 10, note: 'CHEAP AND SAFE', desc: '18 power, 10 uses. Cheap chip damage.' },
-      { id: 'strand', name: 'STRAND SPRINT', power: 24, pp: 7, note: 'STEADY HIT', desc: '24 power, no side effects.' },
-      { id: 'backrow', name: 'BACK ROW NAP', power: 28, pp: 5, self: { status: 'SNOOZE' }, note: 'SNOOZES YOU', desc: '28 power, 5 uses — but it SNOOZES you after.' },
-      { id: 'noteswap', name: 'NOTE SWAP', power: 22, pp: 8, effect: { status: 'PARALYSIS', chance: 0.3 }, note: '30% PARALYSED', desc: '22 power, 30% chance to PARALYSE them.' },
-      { id: 'questiontime', name: 'QUESTION TIME', power: 32, pp: 4, note: 'BIG HIT', desc: '32 power finisher, only 4 uses.' },
+      {
+        id: 'flashcards', name: 'FLASHCARD DRILL', mins: 20, pp: 8,
+        desc: 'Twenty minutes of cards. A quick 17-damage jab you can throw 8 times.',
+      },
+      {
+        id: 'readings', name: 'READING SPRINT', mins: 40, pp: 7,
+        effect: { status: 'PARALYSIS', chance: 0.4 },
+        desc: '40 minutes. 23 damage and a 40% chance to PARALYSE them (they may lose a session).',
+      },
+      {
+        id: 'silentfloor', name: 'SILENT FLOOR', mins: 60, pp: 5, heal: 18,
+        noDamage: true,
+        desc: 'A full quiet hour. No damage — heals you 18 HP.',
+      },
+      {
+        id: 'wikihole', name: '3AM WIKI HOLE', mins: 75, pp: 6,
+        effect: { status: 'POISON', chance: 0.6 },
+        desc: '75 minutes down a rabbit hole. 30 damage, 60% chance to leave them DOOMSCROLLED (-4 HP a session).',
+      },
+      {
+        id: 'pastpaper', name: 'PAST PAPER RUN', mins: 90, pp: 5,
+        desc: 'An hour and a half of past papers. 32 damage, no side effects.',
+      },
+      {
+        id: 'libgrind', name: 'LIBRARY LOCK-IN', mins: 120, pp: 4,
+        desc: 'Two hours locked in the library. 37 damage — and a LOCKED IN steal if they are already statused.',
+      },
+      {
+        id: 'deepwork', name: 'DEEP WORK BLOCK', mins: 180, pp: 3,
+        effect: { status: 'BURNOUT', chance: 0.4 },
+        desc: 'Three hours of deep work. 44 damage, 40% chance to BURN them out (-5 HP a session).',
+      },
+      {
+        id: 'allnighter', name: 'ALL-NIGHTER', mins: 360, pp: 2,
+        self: { status: 'SNOOZE' },
+        desc: 'The whole night, six hours. 61 damage — the biggest hit in the game — then you SNOOZE.',
+      },
     ],
     GYM: [
-      { id: 'gymsession', name: 'KCL GYM SESSION', power: 28, pp: 6, heal: 6, note: 'HEALS 6', desc: '28 power and heals you 6 HP at the same time.' },
-      { id: 'legday', name: 'LEG DAY', power: 36, pp: 3, self: { status: 'SNOOZE' }, note: 'SNOOZES YOU', desc: 'The biggest hit in the game (36) — and it SNOOZES you.' },
-      { id: 'treadmill', name: 'TREADMILL 5K', power: 24, pp: 8, note: 'STEADY HIT', desc: '24 power, 8 uses. Boring and reliable.' },
-      { id: 'protein', name: 'PROTEIN SHAKE', power: 0, pp: 5, heal: 16, note: 'HEALS 16', desc: 'No damage — heals you 16 HP.' },
-      { id: 'warmup', name: 'WARM-UP SET', power: 18, pp: 10, note: 'CHEAP AND SAFE', desc: '18 power, 10 uses. Your cheapest attack.' },
-      { id: 'sparring', name: 'SPARRING ROUND', power: 26, pp: 7, effect: { status: 'BURNOUT', chance: 0.3 }, note: '30% BURNOUT', desc: '26 power, 30% chance to BURN them out (-5 HP a round).' },
-      { id: 'coldshower', name: 'COLD SHOWER', power: 20, pp: 8, cure: true, note: 'CURES STATUS', desc: '20 power and clears any status on you.' },
-      { id: 'onemore', name: 'ONE MORE REP', power: 32, pp: 4, note: 'BIG HIT', desc: '32 power, 4 uses. Finisher.' },
-    ],
-    SOCIAL: [
-      { id: 'sumbar', name: 'SU BAR DECOMP', power: 0, pp: 5, heal: 16, cure: true, note: 'HEAL + CURE', desc: 'No damage — heals 16 HP and clears any status.' },
-      { id: 'mixer', name: 'SOCIETY MIXER', power: 22, pp: 8, effect: { status: 'PARALYSIS', chance: 0.4 }, note: '40% PARALYSED', desc: '22 power, 40% chance to PARALYSE them.' },
-      { id: 'flatpres', name: 'FLAT PRES', power: 26, pp: 7, note: 'STEADY HIT', desc: '26 power, no side effects.' },
-      { id: 'nightout', name: 'NIGHT OUT', power: 34, pp: 3, self: { status: 'SNOOZE' }, note: 'SNOOZES YOU', desc: '34 power in 3 shots — but it SNOOZES you.' },
-      { id: 'coffeechat', name: 'COFFEE CHAT', power: 20, pp: 9, effect: { status: 'POISON', chance: 0.35 }, note: '35% DOOMSCROLL', desc: '20 power, 35% chance to leave them DOOMSCROLLED (-4 HP a round).' },
-      { id: 'groupwork', name: 'GROUP PROJECT', power: 28, pp: 5, effect: { status: 'BURNOUT', chance: 0.3 }, note: '30% BURNOUT', desc: '28 power, 30% chance to BURN them out (-5 HP a round).' },
-      { id: 'facetime', name: '2AM FACETIME', power: 24, pp: 6, effect: { status: 'SNOOZE', chance: 0.35 }, note: '35% SNOOZE', desc: '24 power, 35% chance to put them to SNOOZE.' },
-      { id: 'smalltalk', name: 'SMALL TALK', power: 18, pp: 10, note: 'CHEAP AND SAFE', desc: '18 power, 10 uses. Cheap chip damage.' },
+      {
+        id: 'warmup', name: 'WARM-UP SET', mins: 15, pp: 8,
+        desc: 'Fifteen minutes to warm up. 16 damage, 8 uses.',
+      },
+      {
+        id: 'coldshower', name: 'COLD SHOWER', mins: 20, pp: 6, cure: true,
+        desc: 'Twenty minutes. 17 damage and clears any status on you.',
+      },
+      {
+        id: 'treadmill', name: 'TREADMILL 5K', mins: 30, pp: 7,
+        desc: 'Thirty minutes on the treadmill. 20 damage, boring and reliable.',
+      },
+      {
+        id: 'protein', name: 'PROTEIN SHAKE', mins: 30, pp: 5, heal: 16,
+        noDamage: true,
+        desc: 'Thirty minutes of recovery. No damage — heals you 16 HP.',
+      },
+      {
+        id: 'sparring', name: 'SPARRING ROUND', mins: 45, pp: 6,
+        effect: { status: 'BURNOUT', chance: 0.35 },
+        desc: '45 minutes of sparring. 24 damage, 35% chance to BURN them out (-5 HP a session).',
+      },
+      {
+        id: 'gymsession', name: 'KCL GYM SESSION', mins: 60, pp: 5, heal: 8,
+        desc: 'An hour in the KCL gym. 27 damage and heals you 8 HP at the same time.',
+      },
+      {
+        id: 'onemore', name: 'ONE MORE REP', mins: 90, pp: 4,
+        desc: 'Ninety minutes, one more rep every time. 32 damage, 4 uses.',
+      },
+      {
+        id: 'legday', name: 'LEG DAY', mins: 120, pp: 2, self: { status: 'SNOOZE' },
+        desc: 'Two hours of legs, the longest gym session there is. 37 damage, then you SNOOZE.',
+      },
     ],
   };
 
-  const MOVES = TYPES.reduce((all, type) => {
-    POOLS[type].forEach((move) => all.push(Object.assign({ type }, move)));
-    return all;
-  }, []);
+  /* Every pool entry is a finished move: the lobby picker and the battle
+     buttons read the same object, so a name or a damage number can never
+     disagree between the two screens. */
+  const POOLS = {};
+  TYPES.forEach((type) => {
+    POOLS[type] = RAW[type].map((move) => Object.assign({
+      type,
+      power: move.noDamage ? 0 : powerFor(move.mins),
+      dur: durLabel(move.mins),
+    }, move));
+  });
+
+  const MOVES = TYPES.reduce((all, type) => all.concat(POOLS[type]), []);
 
   HF.TYPES = TYPES;
-  HF.BEATS = BEATS;
   HF.POOLS = POOLS;
   HF.MOVES = MOVES;
+  HF.powerFor = powerFor;
+  HF.durLabel = durLabel;
 })(window.HF);

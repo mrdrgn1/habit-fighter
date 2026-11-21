@@ -78,8 +78,9 @@ window.HF = window.HF || {};
           ? (won ? 'YOU WIN! ★' : 'YOU FAINTED…')
           : 'MATCH IN PROGRESS'}</p>
         ${row('HP LEFT', (me.hp || 0) + ' / ' + (me.maxHp || 0))}
+        ${row('TRAINED', (me.mins || 0) + ' MIN · ' + (me.sessions || 0) + ' SESSIONS')}
         ${row('HITS LANDED', String(me.hits || 0))}
-        ${row('SUPER EFFECTIVE', String(me.supers || 0))}
+        ${row('LOCKED IN COMBOS', String(me.supers || 0))}
         ${row('PROOFS SENT', String(me.proofs || 0))}
         ${row('CAP CALLS LEFT', String(me.bluff == null ? 3 : me.bluff))}
         ${row('STATUS', me.status && me.status !== 'none' ? me.status : 'CLEAN')}

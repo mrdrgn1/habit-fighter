@@ -41,19 +41,15 @@
           <span class="field-label">YOUR TYPE</span>
           <div class="types" id="type-pick" role="group" aria-label="Pick your type">
             <button class="type-btn is-active" type="button" data-type="STUDY">STUDY</button>
-            <button class="type-btn" type="button" data-type="LECTURE">LECTURE</button>
             <button class="type-btn" type="button" data-type="GYM">GYM</button>
-            <button class="type-btn" type="button" data-type="SOCIAL">SOCIAL</button>
           </div>
           <div class="typechart-panel">
-            <p class="typechart-title">TYPE CHART · EACH TYPE BEATS THE NEXT</p>
+            <p class="typechart-title">SAME HABIT OR NO FIGHT</p>
             <ul class="typechart-list">
-              <li><b>STUDY</b><span class="arrow">›</span><b>LECTURE</b></li>
-              <li><b>LECTURE</b><span class="arrow">›</span><b>GYM</b></li>
-              <li><b>GYM</b><span class="arrow">›</span><b>SOCIAL</b></li>
-              <li><b>SOCIAL</b><span class="arrow">›</span><b>STUDY</b></li>
+              <li><b>STUDY</b><span class="arrow">=</span><b>STUDY</b></li>
+              <li><b>GYM</b><span class="arrow">=</span><b>GYM</b></li>
             </ul>
-            <p class="hint">Super effective = 1.5×, and 2.25× if they already have a status.</p>
+            <p class="hint">Both trainers must pick the same type before the battle can start. Every move is a real session of work — the longer its timer, the more damage it does.</p>
           </div>
         </div>
 
@@ -101,24 +97,24 @@
         <div class="manual-step">
           <span class="manual-num">2</span>
           <div class="manual-body">
-            <h3>LOADOUTS, APPROVED</h3>
-            <p>Before the fight each trainer picks a type and exactly <b>six moves</b> from that type's eight. Lock it in, and your rival has to <b>APPROVE</b> it. Both approvals and the battle starts — no default decks.</p>
+            <h3>SAME HABIT, THEN LOADOUTS</h3>
+            <p>Only two types exist: <b>STUDY</b> and <b>GYM</b>. Both trainers must pick the <b>same one</b> — a STUDY trainer and a GYM trainer never start a fight. Then take exactly <b>six moves</b> from that type's eight, lock in, and your rival approves it. If the types clash, one tap on <b>SWITCH TO…</b> joins their habit.</p>
           </div>
         </div>
 
         <div class="manual-step">
           <span class="manual-num">3</span>
           <div class="manual-body">
-            <h3>BOTH ACT EVERY ROUND</h3>
-            <p>Nobody waits a turn. Both trainers lock in one move, and the round fires the moment the second pick lands. First strike alternates each round.</p>
+            <h3>EVERY MOVE IS A TIMER</h3>
+            <p>No turns and no rounds. Pick a move and you are <b>locked in</b> for its real length — 15 minutes, 2 hours, the whole night. Every move button stays dead until the clock hits zero, then the hit lands and you can pick again. Both phones run their own clock.</p>
           </div>
         </div>
 
         <div class="manual-step">
           <span class="manual-num">4</span>
           <div class="manual-body">
-            <h3>FOUR HABITS, ONE WHEEL</h3>
-            <p>STUDY › LECTURE › GYM › SOCIAL › STUDY. Beating a type is 1.5×, and 2.25× if they already have a status. A resisted hit is 0.75×.</p>
+            <h3>TIME IS DAMAGE</h3>
+            <p>Damage comes out of the length of the session: 20 minutes is a 17-damage jab, a 2-hour library lock-in 37, an all-nighter 61. Long sessions cost you hours you cannot pick again — that is the trade. Two hours or more on someone already statused is a <b>LOCKED IN</b> combo: 1.5× and it steals 1 🪙.</p>
           </div>
         </div>
 
@@ -126,7 +122,7 @@
           <span class="manual-num">5</span>
           <div class="manual-body">
             <h3>STATUS AND PP</h3>
-            <p>PARALYSED and SNOOZE can eat your move, BURNOUT bites for 5 HP a round, DOOMSCROLL for 4. Some moves cure you. Run every move dry and you get a second wind.</p>
+            <p>PARALYSED and SNOOZE can eat your session, BURNOUT bites for 5 HP after each one, DOOMSCROLL for 4. Some moves cure you. Run every move dry and you get a second wind.</p>
           </div>
         </div>
 
@@ -216,9 +212,7 @@
         <p class="ld-title">YOUR LOADOUT</p>
         <div class="types" id="loadout-types" role="group" aria-label="Loadout type">
           <button class="type-btn is-active" type="button" data-type="STUDY">STUDY</button>
-          <button class="type-btn" type="button" data-type="LECTURE">LECTURE</button>
           <button class="type-btn" type="button" data-type="GYM">GYM</button>
-          <button class="type-btn" type="button" data-type="SOCIAL">SOCIAL</button>
         </div>
         <p class="ld-count" id="ld-count">PICK 6 MOVES · 0/6</p>
         <div class="ld-moves" id="ld-moves"><!-- eight moves per type, injected by game.js --></div>
@@ -231,6 +225,7 @@
           <div class="lobby-actions">
             <button class="btn btn-good" id="btn-approve" type="button">APPROVE LOADOUT</button>
             <button class="btn btn-bad" id="btn-reject" type="button">REJECT</button>
+            <button class="btn btn-good" id="btn-match-type" type="button" hidden>↺ SWITCH TO GYM</button>
           </div>
         </div>
       </div>
@@ -307,6 +302,19 @@
             </div>
           </div>
 
+          <div class="focusbar" id="focusbar">
+            <div class="focus-cell">
+              <span class="focus-who" id="focus-me-who">YOU</span>
+              <span class="focus-what" id="focus-me-what">NO SESSION</span>
+              <span class="focus-clock" id="focus-me-clock">READY</span>
+            </div>
+            <div class="focus-cell is-right">
+              <span class="focus-who" id="focus-foe-who">RIVAL</span>
+              <span class="focus-what" id="focus-foe-what">NO SESSION</span>
+              <span class="focus-clock" id="focus-foe-clock">READY</span>
+            </div>
+          </div>
+
           <div class="textbox" id="textbox" aria-live="polite">
             <p class="line" id="line-1"></p>
             <p class="line" id="line-2"></p>
@@ -355,7 +363,7 @@
           <button class="btn btn-sm" id="btn-leave-match" type="button">LEAVE · FORFEIT POT + 2 🪙</button>
         </div>
 
-        <p class="typechain" id="typechain">STUDY›LECTURE›GYM›SOCIAL›STUDY</p>
+        <p class="typechain" id="typechain">STUDY SESSION · LONGER WORK = MORE DAMAGE</p>
 
         <button class="btn btn-primary btn-block btn-focus" id="btn-focus-tap" type="button" hidden>WAIT…</button>
         <button class="btn btn-block btn-rematch" id="btn-rematch" type="button" hidden>⟳ REMATCH</button>
@@ -379,6 +387,7 @@
           <button class="btn btn-sm" type="button" data-tok="sweep">SWEEP POT</button>
           <button class="btn btn-sm" type="button" data-tok="bankrupt">GO BANKRUPT</button>
           <button class="btn btn-sm" type="button" data-tok="reset">RESET TO 50</button>
+          <button class="btn btn-sm" type="button" data-tok="finish">END MY TIMER</button>
           <button class="btn btn-sm" type="button" data-tok="ko">KO RIVAL</button>
         </div>
       </div>

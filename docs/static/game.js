@@ -3,7 +3,7 @@
 
    Flow:
      title → (device account) → lobby → pick 4-type + 6 moves → rival approves
-     → battle → both trainers pick a move each round → receipt.
+     → battle → each pick starts a timed session of real work → receipt.
 
    Everything is plain functions on window.HF. No classes, no framework.
    Only the acting client writes to the room; the other one polls it.
@@ -19,6 +19,7 @@ window.HF = window.HF || {};
 
   const MAX_HP = 120;
   const LOADOUT_SIZE = 6;
+  const LONG_SESSION = 120;  // 2 h+ of work is a real LOCK IN
   const CAP_DMG = 25;
   const CAP_FINE = 2;        // a caught liar pays the accuser
   const FALSE_CALL_FINE = 1; // a wrong call pays the accused
@@ -29,10 +30,31 @@ window.HF = window.HF || {};
   const ACCOUNT_KEY = 'hf:account';
   const ACCOUNT_START = 50;
 
+  /* Demo clock: ?speed=60 turns one game minute into one real second, so a
+     2-hour session can be walked through on stage. Default is real time. */
+  const SPEED = (() => {
+    try {
+      const raw = Number(new URLSearchParams(location.search).get('speed'));
+      if (Number.isFinite(raw) && raw > 0) return Math.min(3600, raw);
+    } catch (err) { /* no URLSearchParams: real time */ }
+    return 1;
+  })();
+  const timerMs = (mins) => Math.max(900, Math.round((mins || 0) * 60000 / SPEED));
+
+  /** 1:02:03 / 42:10 — the session clocks on screen. */
+  function clock(ms) {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+  }
+
   const TYPES = HF.TYPES;
-  const BEATS = HF.BEATS;
   const POOLS = HF.POOLS;
   const MOVES = HF.MOVES;
+  const durLabel = HF.durLabel;
   const moveById = (id) => MOVES.find((entry) => entry.id === id) || null;
 
   const STATUS_LABEL = {
@@ -57,6 +79,7 @@ window.HF = window.HF || {};
 
   let state = null;
   let busy = false;
+  let ticking = false;
   let currentLayer = 'title';
   let seenCapKey = '';
   const lastTok = { a: null, b: null, pot: null };
@@ -231,6 +254,8 @@ window.HF = window.HF || {};
       pp: {},
       hits: 0,
       supers: 0,
+      mins: 0,
+      sessions: 0,
       proofs: 0,
       bluff: 3,
       fraud: false,
@@ -249,6 +274,10 @@ window.HF = window.HF || {};
     return { active: false, by: null, at: 0, results: {} };
   }
 
+  function freshFocus() {
+    return { a: null, b: null };
+  }
+
   function newMatch(code, name, type, tokens) {
     const now = Date.now();
     return {
@@ -259,14 +288,13 @@ window.HF = window.HF || {};
       battleNo: 0,
       loadoutGen: 0,
       zone: 'lobby',
-      round: 1,
       winner: null,
       autoRival: false,
       log: [],
       proof: null,
       ante: 3,
       pot: 0,
-      choices: { a: null, b: null },
+      focus: { a: null, b: null },
       loadout: { a: null, b: null },
       cap: freshCap(),
       duel: freshDuel(),
@@ -339,8 +367,7 @@ window.HF = window.HF || {};
     m.zone = 'battle';
     m.battleNo = (m.battleNo || 0) + 1;
     m.pot = 0;
-    m.round = 1;
-    m.choices = { a: null, b: null };
+    m.focus = freshFocus();
     m.winner = null;
     m.rematch = { a: false, b: false };
     m.proof = null;
@@ -360,6 +387,8 @@ window.HF = window.HF || {};
       f.pp = {};
       f.hits = 0;
       f.supers = 0;
+      f.mins = 0;
+      f.sessions = 0;
       f.proofs = 0;
       f.bluff = 3;
       f.fraud = false;
@@ -389,29 +418,26 @@ window.HF = window.HF || {};
     pushLog(m, `${m.a.name} (${m.a.type}) VS ${m.b.name} (${m.b.type})`, 'is-system');
     if (m.b && m.autoRival) pushLog(m, 'SOLO DEMO — the rival plays itself.', 'is-system');
     openBattle(m);
-    pushLog(m, 'Both trainers pick a move each round. Combos steal 🪙.', 'is-system');
+    pushLog(m, 'Every move is a real session. Longer timers hit harder.', 'is-system');
   }
 
   /* ---------------------------------------------------------------------- */
   /* 3. Rules                                                               */
   /* ---------------------------------------------------------------------- */
 
-  function beats(attackType, defendType) {
-    return BEATS[attackType] === defendType;
-  }
-
+  /**
+   * Damage is time: the longer the session, the harder it lands. A LOCKED IN
+   * bonus (2 h+ of work while they carry a status) hits 1.5×, and a BURNED OUT
+   * trainer loses a slice of their own output.
+   */
   function damageFor(move, atk, def) {
-    const effective = beats(move.type, def.type);
-    const resisted = beats(def.type, move.type);
-    const combo = effective && def.status !== 'none' && def.status !== 'FRAUD';
-
-    let mult = effective ? 1.5 : resisted ? 0.75 : 1;
-    if (combo) mult *= 1.5;
+    const combo = move.mins >= LONG_SESSION && def.status !== 'none' && def.status !== 'FRAUD';
+    let mult = combo ? 1.5 : 1;
     if (atk.status === 'BURNOUT') mult *= 0.85;
 
-    const jitter = 0.92 + Math.random() * 0.16;
-    const dmg = Math.max(1, Math.round(move.power * mult * jitter));
-    return { dmg, effective, resisted, combo };
+    const jitter = 0.94 + Math.random() * 0.12;
+    const dmg = Math.max(1, Math.round((move.power || 0) * mult * jitter));
+    return { dmg, combo };
   }
 
   function tickStatus(match, side, events) {
@@ -440,7 +466,7 @@ window.HF = window.HF || {};
     if (!dead.length) return;
 
     match.zone = 'over';
-    match.choices = { a: null, b: null };
+    match.focus = freshFocus(); // faint cancels every running session
     const alive = sides.filter((s) => dead.indexOf(s) === -1);
     match.winner = alive.length === 1 ? alive[0] : null;
 
@@ -458,7 +484,7 @@ window.HF = window.HF || {};
     }
   }
 
-  /** All six moves dry would soft-lock the round — hand out a second wind. */
+  /** All six moves dry would soft-lock the fight — hand out a second wind. */
   function refillIfEmpty(match, side) {
     const f = match[side];
     if (!f) return;
@@ -476,7 +502,7 @@ window.HF = window.HF || {};
     pushLog(match, `${f.name} catches a second wind — PP restored!`, 'is-system');
   }
 
-  /** One trainer's half of a round. No turn flipping: both sides act. */
+  /** One session landing. No turn flipping: each side runs its own clock. */
   function applyMove(match, side, moveId, events) {
     const foeSide = other(side);
     const atk = match[side];
@@ -485,13 +511,17 @@ window.HF = window.HF || {};
     if (!atk || !def || !move) return;
     if (atk.hp <= 0 || def.hp <= 0) return;
 
+    // The hours are spent either way — sleep through them and you get nothing.
+    atk.sessions = (atk.sessions || 0) + 1;
+    atk.mins = (atk.mins || 0) + (move.mins || 0);
+
     if (atk.status === 'SNOOZE' && Math.random() < 0.35) {
-      pushLog(match, `${atk.name} is SNOOZING… move lost!`, 'is-miss');
+      pushLog(match, `${atk.name} slept through ${move.name} — session wasted!`, 'is-miss');
       events.push('miss');
       return;
     }
     if (atk.status === 'PARALYSIS' && Math.random() < 0.3) {
-      pushLog(match, `${atk.name} is PARALYSED! Can't move!`, 'is-miss');
+      pushLog(match, `${atk.name} is PARALYSED — ${move.name} slips away!`, 'is-miss');
       events.push('miss');
       return;
     }
@@ -504,7 +534,7 @@ window.HF = window.HF || {};
     }
     atk.pp[moveId] -= 1;
 
-    pushLog(match, `${atk.name} used ${move.name}!`, 'is-system');
+    pushLog(match, `${atk.name} finishes ${move.name} · ${durLabel(move.mins)}`, 'is-system');
 
     if (move.cure) {
       atk.status = 'none';
@@ -532,23 +562,17 @@ window.HF = window.HF || {};
       const roll = damageFor(move, atk, def);
       def.hp = Math.max(0, def.hp - roll.dmg);
       atk.hits += 1;
-      if (roll.effective) atk.supers += 1;
 
       if (roll.combo) {
-        pushLog(match, `COMBO! It's super effective! -${roll.dmg} HP`, 'is-super');
+        atk.supers += 1;
+        pushLog(match, `LOCKED IN! ${move.mins} MINUTES LAND FOR -${roll.dmg} HP`, 'is-super');
         events.push('super');
-        // LOCKED IN: a perfect type combo steals a token off the defender.
+        // LOCKED IN: out-working a slacking rival steals a token off them.
         transfer(match, foeSide, side, 1, {
           category: 'combo',
           log: `LOCKED IN! ${atk.name} steals %n 🪙 from ${def.name}.`,
           tone: 'is-super',
         });
-      } else if (roll.effective) {
-        pushLog(match, `It's super effective! -${roll.dmg} HP`, 'is-super');
-        events.push('super');
-      } else if (roll.resisted) {
-        pushLog(match, `Not very effective… -${roll.dmg} HP`, 'is-hit');
-        events.push('hit');
       } else {
         pushLog(match, `Hit for ${roll.dmg} damage.`, 'is-hit');
         events.push('hit');
@@ -568,20 +592,39 @@ window.HF = window.HF || {};
     checkFaint(match);
   }
 
-  /** Both picks are in: resolve them in alternating order, then open the next round. */
-  function resolveRound(match, events) {
-    const order = (match.round || 1) % 2 === 1 ? ['a', 'b'] : ['b', 'a'];
-    order.forEach((side) => {
-      if (match.zone !== 'battle') return;
-      const moveId = match.choices && match.choices[side];
-      if (!moveId) return;
-      applyMove(match, side, moveId, events);
-    });
+  /**
+   * A pick starts a real session. The timer is the move's own length, the hit
+   * lands when it runs out, and no other move can be picked until then.
+   */
+  function startSession(match, side, moveId) {
+    const f = match[side];
+    const move = moveById(moveId);
+    if (!f || !move || match.zone !== 'battle') return false;
+    if (!match.focus) match.focus = freshFocus();
+    if (match.focus[side]) return false;
+    const now = Date.now();
+    match.focus[side] = {
+      moveId,
+      mins: move.mins,
+      startAt: now,
+      endAt: now + timerMs(move.mins),
+    };
+    pushLog(match, `${f.name} starts ${move.name} — ${durLabel(move.mins)} on the clock.`, 'is-system');
+    return true;
+  }
 
-    match.choices = { a: null, b: null };
-    if (match.zone !== 'battle') return;
-    match.round = (match.round || 1) + 1;
-    ['a', 'b'].forEach((side) => refillIfEmpty(match, side));
+  /** Timer up: the session pays out and that trainer is free to pick again. */
+  function resolveSession(match, side) {
+    const focus = match.focus && match.focus[side];
+    if (!focus || match.zone !== 'battle') return null;
+    if (Date.now() < focus.endAt) return null;
+    const move = moveById(focus.moveId);
+    match.focus[side] = null;
+    if (!move) return [];
+    const events = [];
+    applyMove(match, side, move.id, events);
+    if (match.zone === 'battle') refillIfEmpty(match, side);
+    return events;
   }
 
   /* ---------------------------------------------------------------------- */
@@ -594,9 +637,59 @@ window.HF = window.HF || {};
     return next;
   }
 
+  function ensureShape(match) {
+    if (!match) return match;
+    if (!match.focus) match.focus = freshFocus();
+    if (!match.loadout) match.loadout = { a: null, b: null };
+    return match;
+  }
+
+  /**
+   * Once a second: repaint the clocks and cash in any session whose time is up.
+   * Each client resolves only its own seat (plus the fake rival in solo mode),
+   * so two phones can never pay the same session out twice.
+   */
+  async function tick() {
+    if (!state || state.zone !== 'battle') return;
+    updateClocks();
+    if (busy || ticking) return;
+
+    const mine = state.focus && state.focus[session.seat];
+    const foeSide = other(session.seat);
+    const theirs = state.autoRival && state.focus && state.focus[foeSide];
+    const now = Date.now();
+    const mineDue = mine && now >= mine.endAt;
+    const theirsDue = theirs && now >= theirs.endAt;
+    if (!mineDue && !theirsDue) return;
+
+    ticking = true;
+    const events = [];
+    try {
+      await publish((m) => {
+        if (m.zone !== 'battle') return;
+        const own = resolveSession(m, session.seat);
+        if (own) events.push(...own);
+        if (m.autoRival) {
+          const rivalEvents = resolveSession(m, foeSide);
+          if (rivalEvents) events.push(...rivalEvents);
+        }
+      });
+      events.forEach((name) => HF.sound.play(name));
+      if (events.indexOf('hit') !== -1 || events.indexOf('super') !== -1) {
+        HF.ui.hitSprite('foe');
+        HF.ui.shake();
+      }
+    } catch (err) {
+      /* the next tick retries */
+    } finally {
+      ticking = false;
+    }
+  }
+
   function applyState(match, options) {
     const opts = options || {};
     if (!match) return;
+    ensureShape(match);
     const prev = state;
 
     state = match;
@@ -694,8 +787,8 @@ window.HF = window.HF || {};
     wrap.innerHTML = pool.map((move) => (
       `<button class="btn mv-pick" type="button" data-mv="${move.id}">
         <span class="mv-name">${move.name}</span>
-        <span class="mv-meta">PP ${move.pp} · ${move.power ? move.power + ' POWER' : 'SUPPORT'}</span>
-        <span class="mv-desc">${move.desc || move.note}</span>
+        <span class="mv-meta">${durLabel(move.mins)} · ${move.power ? move.power + ' DMG' : 'SUPPORT'} · PP ${move.pp}</span>
+        <span class="mv-desc">${move.desc}</span>
       </button>`
     )).join('');
   }
@@ -738,8 +831,12 @@ window.HF = window.HF || {};
     const rival = (match.loadout && match.loadout[otherSide]) || null;
     const approved = !!(mine && mine.approved);
     const status = $('ld-status');
+    // Same habit or no fight: a STUDY trainer cannot brawl with a GYM trainer.
+    const clash = !!(rival && rival.locked && rival.type !== session.pick.type);
 
-    if (mine && mine.locked) {
+    if (clash) {
+      status.textContent = `TYPE CLASH — RIVAL IS ON ${rival.type}. BOTH SIDES MUST PICK ${rival.type}.`;
+    } else if (mine && mine.locked) {
       if (approved) status.textContent = 'RIVAL APPROVED YOUR LOADOUT ✓';
       else if (!rival || !rival.locked) status.textContent = 'WAITING FOR YOUR RIVAL TO BUILD A LOADOUT…';
       else status.textContent = 'RIVAL HAS NOT APPROVED YOUR LOADOUT YET…';
@@ -756,13 +853,46 @@ window.HF = window.HF || {};
         const move = moveById(id);
         return move ? move.name : id;
       });
-      $('ld-rival').textContent = `${rival.type} · ${names.join(' / ')}`;
-      $('btn-approve').disabled = !!rival.approved || !(mine && mine.locked);
+      const total = (rival.moves || []).reduce((sum, id) => {
+        const move = moveById(id);
+        return sum + (move ? move.mins : 0);
+      }, 0);
+      $('ld-rival').textContent = `${rival.type} · ${names.join(' / ')} · ${durLabel(total)} TOTAL`;
+      $('btn-approve').disabled = !!rival.approved || !(mine && mine.locked) || clash;
       $('btn-approve').textContent = rival.approved ? '✓ APPROVED' : 'APPROVE LOADOUT';
       $('btn-reject').disabled = !!rival.approved;
+      const matchBtn = $('btn-match-type');
+      if (matchBtn) {
+        matchBtn.hidden = !clash;
+        matchBtn.textContent = `↺ SWITCH TO ${rival.type}`;
+      }
     } else {
       review.hidden = true;
+      const matchBtn = $('btn-match-type');
+      if (matchBtn) matchBtn.hidden = true;
     }
+  }
+
+  /** Types are shared: one tap drops your locked loadout and joins their habit. */
+  async function matchRivalType() {
+    if (!state || state.zone !== 'lobby') return;
+    const rival = (state.loadout || {})[other(session.seat)];
+    if (!rival || !rival.locked || !rival.type) return;
+    const mine = myLoadout(state);
+    session.pick = { type: rival.type, moves: [] };
+    if (mine && mine.locked) {
+      await publish((m) => {
+        const own = m.loadout && m.loadout[session.seat];
+        if (own) {
+          own.locked = false;
+          own.approved = false;
+        }
+      });
+    }
+    buildMovePicker();
+    if (state) renderLoadout(state);
+    HF.ui.toast(`SWITCHED TO ${rival.type} — PICK SIX AND LOCK IN`);
+    HF.sound.play('select');
   }
 
   function pickMoveForLoadout(id) {
@@ -800,6 +930,8 @@ window.HF = window.HF || {};
     const flag = $('turnflag');
     flag.classList.remove('is-rival', 'is-over');
     const capOpen = !!(match.cap && match.cap.active);
+    const myFocus = (match.focus && match.focus[session.seat]) || null;
+    const foeFocus = (match.focus && match.focus[other(session.seat)]) || null;
 
     if (match.zone === 'over') {
       flag.textContent = match.winner === session.seat ? 'VICTORY!' : match.winner ? 'DEFEAT…' : 'DRAW';
@@ -808,11 +940,14 @@ window.HF = window.HF || {};
     } else if (capOpen) {
       flag.textContent = 'CAP CALL!';
       flag.classList.add('is-rival');
-    } else if (match.choices && match.choices[session.seat]) {
-      flag.textContent = 'WAITING FOR RIVAL';
+    } else if (myFocus) {
+      flag.textContent = 'IN SESSION · ' + clock(myFocus.endAt - Date.now());
+      flag.classList.add('is-rival');
+    } else if (foeFocus) {
+      flag.textContent = 'THEY ARE TRAINING';
       flag.classList.add('is-rival');
     } else {
-      flag.textContent = `ROUND ${match.round || 1} · PICK`;
+      flag.textContent = 'PICK A SESSION';
     }
 
     HF.ui.setText((match.log || []).slice(-3));
@@ -823,11 +958,14 @@ window.HF = window.HF || {};
         hint.textContent = 'MATCH OVER — REMATCH, OR LEAVE FOR GOOD';
       } else if (capOpen) {
         hint.textContent = 'CAP CALL OPEN — NO MOVES UNTIL IT SETTLES';
-      } else if (match.choices && match.choices[session.seat]) {
-        const picked = moveById(match.choices[session.seat]);
-        hint.textContent = `✓ ${picked ? picked.name : 'MOVE'} LOCKED — TAP ANOTHER MOVE TO SWAP IT`;
+      } else if (myFocus) {
+        const picked = moveById(myFocus.moveId);
+        hint.textContent = `LOCKED IN: ${picked ? picked.name : 'SESSION'} · ${clock(myFocus.endAt - Date.now())} LEFT — NO NEW MOVE UNTIL IT ENDS`;
+      } else if (foeFocus) {
+        const picked = moveById(foeFocus.moveId);
+        hint.textContent = `RIVAL IS ON ${picked ? picked.name : 'A SESSION'} · PICK YOUR OWN`;
       } else {
-        hint.textContent = 'BOTH TRAINERS PICK — FIRST STRIKE ALTERNATES EACH ROUND';
+        hint.textContent = 'PICK A SESSION · THE LONGER THE WORK, THE HARDER IT HITS';
       }
     }
 
@@ -845,7 +983,11 @@ window.HF = window.HF || {};
     renderMoves(match);
     renderProof(match, me);
     renderTokens(match);
+    renderFocusBar(match);
     renderRematch(match);
+
+    const chain = $('typechain');
+    if (chain) chain.textContent = `${me.type || 'STUDY'} SESSION · LONGER WORK = MORE DAMAGE`;
 
     const myTokens = me.tokens == null ? 0 : me.tokens;
     const canCall = !!me && (me.bluff || 0) > 0 && match.zone === 'battle' && myTokens > 0 && !capOpen;
@@ -908,9 +1050,9 @@ window.HF = window.HF || {};
   function renderMoves(match) {
     const me = match[session.seat];
     const capOpen = !!(match.cap && match.cap.active);
-    const chosen = !!(match.choices && match.choices[session.seat]);
-    // A locked pick can still be swapped, so a tap always does something.
-    const canAct = match.zone === 'battle' && !capOpen;
+    const running = (match.focus && match.focus[session.seat]) || null;
+    // The lock-in: no second move until your own timer runs out.
+    const canAct = match.zone === 'battle' && !capOpen && !running;
 
     const ids = (me && me.moves && me.moves.length) ? me.moves : defaultMoves(me ? me.type : 'STUDY');
     const key = ids.join(',');
@@ -923,10 +1065,17 @@ window.HF = window.HF || {};
       const move = moveById(btn.dataset.move);
       if (!move) return;
       const pp = me && me.pp[move.id] != null ? me.pp[move.id] : move.pp;
+      const active = !!running && running.moveId === move.id;
       btn.querySelector('.pp').textContent = pp;
       btn.disabled = !canAct || pp <= 0;
       btn.classList.toggle('is-used', pp <= 0);
-      btn.classList.toggle('is-picked', chosen && match.choices[session.seat] === move.id);
+      btn.classList.toggle('is-picked', active);
+      const note = btn.querySelector('.mv-note');
+      if (note) {
+        note.textContent = active
+          ? `IN SESSION · ${clock(running.endAt - Date.now())}`
+          : `${durLabel(move.mins)} OF WORK`;
+      }
     });
   }
 
@@ -938,10 +1087,61 @@ window.HF = window.HF || {};
       if (!move) return '';
       return `<button class="btn move-btn" type="button" data-move="${move.id}">
         <span class="mv-name">${move.name}</span>
-        <span class="mv-meta">PP <span class="pp">${move.pp}</span> · ${move.type}</span>
-        <span class="mv-note">${move.note}</span>
+        <span class="mv-meta">${durLabel(move.mins)} · <span class="pp">${move.pp}</span> PP · ${move.power ? move.power + ' DMG' : 'SUPPORT'}</span>
+        <span class="mv-note">${durLabel(move.mins)} OF WORK</span>
       </button>`;
     }).join('');
+  }
+
+  /* ------------------------------------------------------------- focus clock */
+
+  function paintFocusCell(which, focus) {
+    const what = $('focus-' + which + '-what');
+    const clockEl = $('focus-' + which + '-clock');
+    if (!what || !clockEl) return;
+    if (!focus) {
+      what.textContent = 'NO SESSION';
+      clockEl.textContent = 'READY';
+      clockEl.classList.remove('is-soon');
+      return;
+    }
+    const move = moveById(focus.moveId);
+    const left = focus.endAt - Date.now();
+    what.textContent = move ? move.name : 'SESSION';
+    clockEl.textContent = left > 0 ? clock(left) : 'DONE';
+    clockEl.classList.toggle('is-soon', left <= 0);
+  }
+
+  function renderFocusBar(match) {
+    if (!$('focus-me-what')) return;
+    const me = match[session.seat] || {};
+    const foe = match[other(session.seat)] || {};
+    $('focus-me-who').textContent = 'YOU · ' + (me.type || '—');
+    $('focus-foe-who').textContent = (foe.name || 'RIVAL').slice(0, 8) + ' · ' + (foe.type || '—');
+    paintFocusCell('me', (match.focus && match.focus[session.seat]) || null);
+    paintFocusCell('foe', (match.focus && match.focus[other(session.seat)]) || null);
+  }
+
+  /** Cheap once-a-second refresh: only the clocks, never a full redraw. */
+  function updateClocks() {
+    if (!state || state.zone !== 'battle' || !$('focus-me-what')) return;
+    const mine = (state.focus && state.focus[session.seat]) || null;
+    const theirs = (state.focus && state.focus[other(session.seat)]) || null;
+    paintFocusCell('me', mine);
+    paintFocusCell('foe', theirs);
+    if (!mine) return;
+
+    const left = clock(mine.endAt - Date.now());
+    const move = moveById(mine.moveId);
+    const capOpen = !!(state.cap && state.cap.active);
+    const flag = $('turnflag');
+    if (flag && !capOpen && state.zone === 'battle') flag.textContent = 'IN SESSION · ' + left;
+    const hint = $('battle-hint');
+    if (hint && !capOpen) {
+      hint.textContent = `LOCKED IN: ${move ? move.name : 'SESSION'} · ${left} LEFT — NO NEW MOVE UNTIL IT ENDS`;
+    }
+    const note = document.querySelector(`.move-btn[data-move="${mine.moveId}"] .mv-note`);
+    if (note) note.textContent = 'IN SESSION · ' + left;
   }
 
   function renderRematch(match) {
@@ -1141,6 +1341,8 @@ window.HF = window.HF || {};
     const L = m.loadout || {};
     const gen = m.loadoutGen || 0;
     if (!L.a || !L.b) return false;
+    // One habit per fight: different types never start a battle.
+    if (L.a.type !== L.b.type) return false;
     return !!(L.a.locked && L.b.locked && L.a.approved && L.b.approved &&
       (L.a.gen || 0) === gen && (L.b.gen || 0) === gen);
   }
@@ -1166,13 +1368,17 @@ window.HF = window.HF || {};
       m[session.seat].type = type;
       pushLog(m, `${m[session.seat].name} locked a ${type} loadout.`, 'is-system');
       if (m.autoRival && session.seat === 'a') {
-        // One person playing both seats: approve instantly.
+        // One person playing both seats: the rival mirrors your habit, so the
+        // same-type rule holds without a second human.
         m.loadout.a.approved = true;
         if (m.loadout.b) {
-          m.loadout.b.approved = true;
+          m.loadout.b.type = type;
+          m.loadout.b.moves = randomLoadout(type);
           m.loadout.b.locked = true;
+          m.loadout.b.approved = true;
           m.loadout.b.gen = m.loadoutGen || 0;
         }
+        if (m.b) m.b.type = type;
       }
       if (readyToFight(m)) startBattle(m);
     });
@@ -1213,8 +1419,7 @@ window.HF = window.HF || {};
       return;
     }
     const foeSide = other(session.seat);
-    const pool = TYPES.filter((t) => t !== session.pick.type);
-    const type = pool[Math.floor(Math.random() * pool.length)] || 'GYM';
+    const type = session.pick.type; // same habit, or the match cannot start
     await publish((m) => {
       m[foeSide] = fighter('RIVAL', type, session.account.tokens);
       m.autoRival = true;
@@ -1233,8 +1438,8 @@ window.HF = window.HF || {};
   }
 
   /**
-   * A round of moves: each trainer locks exactly one move and the round fires
-   * as soon as both are in, so nobody sits waiting for a turn.
+   * Picking a move locks you in for its full length. The damage lands when the
+   * timer ends; until then every move button stays dead.
    */
   async function pickMove(moveId) {
     if (busy || !state || state.zone !== 'battle') return;
@@ -1246,35 +1451,27 @@ window.HF = window.HF || {};
     const move = moveById(moveId);
     if (!me || !move) return;
     if ((me.moves || []).indexOf(moveId) === -1) return;
+
+    const running = state.focus && state.focus[session.seat];
+    if (running) {
+      HF.ui.toast(`IN SESSION · ${clock(running.endAt - Date.now())} LEFT`, true);
+      return;
+    }
+
     const pp = me.pp[moveId] == null ? move.pp : me.pp[moveId];
     if (pp <= 0) {
       HF.ui.toast('NO PP LEFT ON THAT MOVE', true);
       return;
     }
 
-    const round = state.round || 1;
-    const swapping = !!(state.choices && state.choices[session.seat]);
     busy = true;
-    const events = [];
     try {
-      const next = await publish((m) => {
+      await publish((m) => {
         if (m.zone !== 'battle') return;
-        if ((m.round || 1) !== round) return; // a late tap must not reopen a finished round
         if (m.cap && m.cap.active) return;
-        m.choices[session.seat] = moveId;
-        pushLog(m, swapping
-          ? `${m[session.seat].name} swaps to ${move.name}.`
-          : `${m[session.seat].name} locks in ${move.name}.`, 'is-system');
-        if (m.choices.a && m.choices.b) resolveRound(m, events);
+        startSession(m, session.seat, moveId);
       });
-      if (next && (next.round || 1) !== round) {
-        HF.ui.toast('THAT ROUND ALREADY RESOLVED — PICK FOR THE NEW ONE');
-      }
-      events.forEach((name) => HF.sound.play(name));
-      if (events.indexOf('hit') !== -1 || events.indexOf('super') !== -1) {
-        HF.ui.hitSprite('foe');
-        HF.ui.shake();
-      }
+      HF.sound.play('join');
     } catch (err) {
       HF.ui.toast('MOVE FAILED TO SYNC: ' + err.message, true);
     } finally {
@@ -1538,7 +1735,7 @@ window.HF = window.HF || {};
     m.zone = 'lobby';
     m.winner = null;
     m.rematch = { a: false, b: false };
-    m.choices = { a: null, b: null };
+    m.focus = freshFocus();
     m.proof = null;
     m.cap = freshCap();
     m.duel = freshDuel();
@@ -1632,7 +1829,7 @@ window.HF = window.HF || {};
         // top of it. The rival collects both.
         m.zone = 'over';
         m.winner = foeSide;
-        m.choices = { a: null, b: null };
+        m.focus = freshFocus();
         transfer(m, 'pot', foeSide, potValue, {
           category: 'pot',
           log: `FORFEITED POT — ${rivalName} takes the %n 🪙 pot.`,
@@ -1694,6 +1891,10 @@ window.HF = window.HF || {};
           m.pot = 0;
           pushLog(m, 'DEV: wallet back to 50 🪙.', 'is-system');
           break;
+        case 'finish':
+          // Dev only: drop the clock to zero so the payout can be shown now.
+          if (m.focus[session.seat]) m.focus[session.seat].endAt = Date.now() - 1;
+          break;
         case 'ko':
           if (m[foe]) m[foe].hp = 0;
           checkFaint(m);
@@ -1736,7 +1937,7 @@ window.HF = window.HF || {};
       if (results.b == null && !autoTimer) autoTimer = setTimeout(autoDuel, 2200);
       return;
     }
-    if (state.choices && !state.choices.b) {
+    if (!state.focus || !state.focus.b) {
       if (!autoTimer) autoTimer = setTimeout(autoPick, 1400);
     }
   }
@@ -1749,6 +1950,13 @@ window.HF = window.HF || {};
     try {
       await publish((m) => {
         if (m.zone !== 'lobby' || !m.loadout || !m.loadout.b) return;
+        const human = m.loadout.a || {};
+        if (human.type && m.loadout.b.type !== human.type) {
+          // the fake rival follows whatever habit the human picked
+          m.loadout.b.type = human.type;
+          m.loadout.b.moves = randomLoadout(human.type);
+          if (m.b) m.b.type = human.type;
+        }
         m.loadout.b.locked = true;
         m.loadout.b.approved = true;
         m.loadout.b.gen = m.loadoutGen || 0;
@@ -1832,38 +2040,37 @@ window.HF = window.HF || {};
     autoTimer = null;
     if (busy || !state || state.zone !== 'battle' || !state.autoRival) return;
     if (state.cap && state.cap.active) return;
-    if (state.choices.b) return;
+    if (!state.focus || state.focus.b) return;
 
     const foe = state.b;
     if (!foe) return;
     const ids = (foe.moves && foe.moves.length) ? foe.moves : defaultMoves(foe.type);
-    const pool = ids.filter((id) => {
-      const move = moveById(id);
-      const pp = foe.pp[id] == null ? (move ? move.pp : 0) : foe.pp[id];
-      return pp > 0;
-    });
-    const list = pool.length ? pool : ids;
-    const moveId = list[Math.floor(Math.random() * list.length)];
-    const events = [];
+    // The solo rival trains in short bursts, so its sessions actually finish
+    // while you are watching the demo.
+    const usable = ids
+      .filter((id) => {
+        const move = moveById(id);
+        const pp = foe.pp[id] == null ? (move ? move.pp : 0) : foe.pp[id];
+        return move && pp > 0;
+      })
+      .map((id) => moveById(id))
+      .sort((x, y) => x.mins - y.mins);
+    const move = usable[0];
+    if (!move) return;
 
     busy = true;
     try {
       await publish((m) => {
         if (m.zone !== 'battle') return;
-        if (m.choices.b) return;
-        m.choices.b = moveId;
-        const move = moveById(moveId);
-        pushLog(m, `${m.b.name} locks in ${move ? move.name : moveId}.`, 'is-system');
-        if (m.choices.a && m.choices.b) resolveRound(m, events);
+        if (m.focus.b) return;
+        startSession(m, 'b', move.id);
       });
-      events.forEach((name) => HF.sound.play(name));
-      HF.ui.shake();
+      HF.sound.play('select');
     } catch (err) {
       HF.ui.toast('AUTO-RIVAL STALLED', true);
     } finally {
       busy = false;
-      const resolved = state && state.zone === 'over';
-      if (!resolved) setTimeout(() => maybeAutoPlay(), 400);
+      if (state && state.zone === 'battle') setTimeout(() => maybeAutoPlay(), 400);
     }
   }
 
@@ -1915,6 +2122,7 @@ window.HF = window.HF || {};
     $('btn-lock').addEventListener('click', lockLoadout);
     $('btn-approve').addEventListener('click', approveLoadout);
     $('btn-reject').addEventListener('click', rejectLoadout);
+    $('btn-match-type').addEventListener('click', matchRivalType);
 
     $('btn-create').addEventListener('click', createMatch);
     $('btn-howto').addEventListener('click', () => {
@@ -2056,6 +2264,7 @@ window.HF = window.HF || {};
     bind();
     renderAccountLine();
     renderHistory();
+    setInterval(tick, 1000);
 
     const params = new URLSearchParams((location.hash || '').replace(/^#/, ''));
     const roomCode = params.get('room');
@@ -2098,9 +2307,10 @@ window.HF = window.HF || {};
 
   /* Exposed for the console and the rule tests: no behaviour change. */
   HF.dev = {
-    newMatch, fighter, applyMove, resolveRound, checkFaint, damageFor, beats,
-    settleCap, openBattle, transfer, randomLoadout, defaultMoves, verdict,
-    moves: MOVES, MAX_HP, LOADOUT_SIZE,
+    newMatch, fighter, applyMove, startSession, resolveSession, checkFaint,
+    damageFor, settleCap, openBattle, transfer, randomLoadout, defaultMoves,
+    verdict, timerMs, clock, handleTick: tick,
+    moves: MOVES, MAX_HP, LOADOUT_SIZE, LONG_SESSION, SPEED,
   };
 
   if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', init);
