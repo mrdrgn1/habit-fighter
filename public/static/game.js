@@ -1,0 +1,2354 @@
+/* ==========================================================================
+   game.js  —  rooms, loadouts, simultaneous rounds, caps and the token wallet.
+
+   Flow:
+     title → (device account) → lobby → pick 4-type + 6 moves → rival approves
+     → battle → each pick starts a timed session of real work → receipt.
+
+   Everything is plain functions on window.HF. No classes, no framework.
+   Only the acting client writes to the room; the other one polls it.
+   ========================================================================== */
+
+window.HF = window.HF || {};
+
+(function (HF) {
+  'use strict';
+
+  const $ = HF.$;
+  const $$ = HF.$$;
+
+  const MAX_HP = 120;
+  const LOADOUT_SIZE = 6;
+  const LONG_SESSION = 120;  // 2 h+ of work is a real LOCK IN
+  const CAP_DMG = 25;
+  const CAP_FINE = 2;        // a caught liar pays the accuser
+  const FALSE_CALL_FINE = 1; // a wrong call pays the accused
+  const DUEL_DMG = 12;
+  const LEAVE_FINE = 2;      // walking out mid-match pays the rival
+  const LEAVE_ARM_MS = 4000; // first tap only arms the button
+  const HISTORY_MAX = 30;
+  const ACCOUNT_KEY = 'hf:account';
+  const ACCOUNT_START = 50;
+
+  /* Demo clock, flipped from the DEV panel and shared through the room: a
+     2-hour session runs for 5 real seconds, a 4-hour one for 10. Real time is
+     the default, so nothing changes for an actual match. */
+  const DEMO_MS_PER_MIN = 1000 / 24;
+  const timerMs = (match, mins) => Math.max(
+    800,
+    Math.round((mins || 0) * ((match && match.demo) ? DEMO_MS_PER_MIN : 60000))
+  );
+
+  /** 1:02:03 / 42:10 — the session clocks on screen. */
+  function clock(ms) {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+  }
+
+  const TYPES = HF.TYPES;
+  const POOLS = HF.POOLS;
+  const MOVES = HF.MOVES;
+  const durLabel = HF.durLabel;
+  const moveById = (id) => MOVES.find((entry) => entry.id === id) || null;
+
+  const STATUS_LABEL = {
+    none: '',
+    SNOOZE: 'SNOOZE',
+    PARALYSIS: 'PARALYSED',
+    BURNOUT: 'BURNOUT',
+    POISON: 'DOOMSCROLL',
+    FRAUD: 'FRAUD',
+  };
+
+  const session = {
+    code: null,
+    seat: null,
+    name: 'TRAINER',
+    type: 'STUDY',
+    ante: 3,
+    account: null,
+    pick: { type: 'STUDY', moves: [] },
+    recordedKey: null,
+  };
+
+  let state = null;
+  let busy = false;
+  let ticking = false;
+  let currentLayer = 'title';
+  let seenCapKey = '';
+  const lastTok = { a: null, b: null, pot: null };
+  let autoTimer = null;
+  let focusStart = 0;
+  let focusArmed = false;
+  let focusTimer = null;
+  let builtKey = '';
+  let pickerType = '';
+  let leaveArmed = false;
+  let leaveTimer = null;
+
+  const other = (side) => (side === 'a' ? 'b' : 'a');
+  const esc = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ));
+
+  /* ---------------------------------------------------------------------- */
+  /* 1. Device account + battle history                                     */
+  /* ---------------------------------------------------------------------- */
+
+  function blankAccount(name) {
+    return {
+      name: String(name || 'TRAINER').toUpperCase().slice(0, 10),
+      tokens: ACCOUNT_START,
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      history: [],
+      createdAt: Date.now(),
+    };
+  }
+
+  function loadAccount() {
+    try {
+      const raw = localStorage.getItem(ACCOUNT_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (saved && typeof saved.tokens === 'number' && Array.isArray(saved.history)) {
+          if (typeof saved.wins !== 'number') saved.wins = 0;
+          if (typeof saved.losses !== 'number') saved.losses = 0;
+          if (typeof saved.draws !== 'number') saved.draws = 0;
+          if (!saved.name) saved.name = 'TRAINER';
+          return saved;
+        }
+      }
+    } catch (err) {
+      /* corrupt or blocked storage: start fresh */
+    }
+    const fresh = blankAccount('TRAINER');
+    try {
+      localStorage.setItem(ACCOUNT_KEY, JSON.stringify(fresh));
+    } catch (err) { /* private mode */ }
+    return fresh;
+  }
+
+  function saveAccount() {
+    if (!session.account) return;
+    try {
+      localStorage.setItem(ACCOUNT_KEY, JSON.stringify(session.account));
+    } catch (err) { /* private mode: this session still counts */ }
+  }
+
+  /** Net-based flavour line, shared with the printer. */
+  function verdict(net, finalTokens) {
+    if (finalTokens <= 0) return 'GENERATIONAL DEBT';
+    if (net >= 15) return 'HABIT TYCOON';
+    if (net >= 8) return 'COMPOUND INTEREST';
+    if (net > 0) return 'IN THE GREEN';
+    if (net === 0) return 'EXACTLY EVEN';
+    if (net <= -15) return 'GENERATIONAL DEBT';
+    return 'IN THE RED';
+  }
+
+  HF.verdict = verdict;
+
+  function renderAccountLine() {
+    const acc = session.account;
+    if (!acc) return;
+    const line = $('acct-line');
+    if (line) {
+      line.textContent = `DEVICE TRAINER · ${acc.name} · ${acc.tokens} 🪙 · ${acc.wins}W-${acc.losses}L`;
+    }
+    const hint = $('ante-hint');
+    if (hint) {
+      hint.textContent = `Wallet: ${acc.tokens} 🪙 saved on this device. The ante comes out of it, and the winner sweeps the pot.`;
+    }
+  }
+
+  /** Write the final wallet + one history row, once per battle. */
+  function maybeRecord(match) {
+    if (!match || match.zone !== 'over' || !session.seat || !session.account) return;
+    const me = match[session.seat];
+    if (!me) return;
+    const key = `${match.code}:${match.createdAt}:${match.battleNo || 1}`;
+    let stored = null;
+    try { stored = localStorage.getItem('hf:recorded'); } catch (err) { /* private mode */ }
+    if (session.recordedKey === key || stored === key) return;
+    session.recordedKey = key;
+    try { localStorage.setItem('hf:recorded', key); } catch (err) { /* private mode */ }
+
+    const start = me.startTokens == null ? me.tokens : me.startTokens;
+    const net = (me.tokens || 0) - start;
+    const won = match.winner === session.seat;
+    const draw = match.winner == null;
+
+    session.account.tokens = Math.max(0, me.tokens || 0);
+    if (won) session.account.wins += 1;
+    else if (draw) session.account.draws += 1;
+    else session.account.losses += 1;
+
+    const foeSide = other(session.seat);
+    const foe = match[foeSide] || {};
+    session.account.history.unshift({
+      at: Date.now(),
+      code: match.code,
+      rival: foe.name || 'RIVAL',
+      rivalType: foe.type || '—',
+      myType: me.type || '—',
+      result: won ? 'WIN' : draw ? 'DRAW' : 'LOSS',
+      net,
+      tokens: session.account.tokens,
+      verdict: verdict(net, session.account.tokens),
+    });
+    session.account.history = session.account.history.slice(0, HISTORY_MAX);
+    saveAccount();
+    renderAccountLine();
+    renderHistory();
+  }
+
+  function renderHistory() {
+    const acc = session.account;
+    const list = $('hist-list');
+    if (!acc || !list) return;
+    const summary = $('hist-summary');
+    if (summary) {
+      summary.textContent = `${acc.name} · ${acc.tokens} 🪙 · ${acc.wins}W-${acc.losses}L-${acc.draws}D · ${acc.history.length} battle${acc.history.length === 1 ? '' : 's'} on this device`;
+    }
+    if (!acc.history.length) {
+      list.innerHTML = '<p class="hist-empty">NO BATTLES YET. YOUR TOKENS WAIT AT 50 🪙.</p>';
+      return;
+    }
+    list.innerHTML = acc.history.map((entry) => {
+      const date = new Date(entry.at);
+      const pad = (n) => String(n).padStart(2, '0');
+      const when = `${pad(date.getDate())}/${pad(date.getMonth() + 1)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+      const sign = entry.net > 0 ? '+' : '';
+      const tone = entry.result === 'WIN' ? 'is-win' : entry.result === 'LOSS' ? 'is-loss' : 'is-draw';
+      return `<div class="hist-row">
+        <span class="hist-when">${when}</span>
+        <span class="hist-who">VS ${esc(entry.rival)}<br><em>${esc(entry.myType)} v ${esc(entry.rivalType)}</em></span>
+        <span class="hist-res ${tone}">${esc(entry.result)}</span>
+        <span class="hist-net">${sign}${Number(entry.net) || 0} 🪙</span>
+      </div>`;
+    }).join('');
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 2. State shape                                                         */
+  /* ---------------------------------------------------------------------- */
+
+  function fighter(name, type, tokens) {
+    const wallet = Math.max(0, Number(tokens) || 0);
+    return {
+      name: String(name || 'TRAINER').toUpperCase().slice(0, 10) || 'TRAINER',
+      type: type || 'STUDY',
+      hp: MAX_HP,
+      maxHp: MAX_HP,
+      status: 'none',
+      statusTurns: 0,
+      moves: [],
+      pp: {},
+      hits: 0,
+      supers: 0,
+      mins: 0,
+      sessions: 0,
+      proofs: 0,
+      bluff: 3,
+      fraud: false,
+      tokens: wallet,
+      startTokens: wallet,
+      // signed per-category tally so the receipt can show where tokens went
+      tok: { combo: 0, cap: 0, ante: 0, pot: 0, leave: 0 },
+    };
+  }
+
+  function freshCap() {
+    return { active: false, by: null, accused: null, stage: '', at: 0, result: null, proof: null };
+  }
+
+  function freshDuel() {
+    return { active: false, by: null, at: 0, results: {} };
+  }
+
+  function freshFocus() {
+    return { a: null, b: null };
+  }
+
+  function newMatch(code, name, type, tokens) {
+    const now = Date.now();
+    return {
+      code,
+      createdAt: now,
+      updatedAt: now,
+      lastActAt: now,
+      battleNo: 0,
+      loadoutGen: 0,
+      zone: 'lobby',
+      winner: null,
+      autoRival: false,
+      demo: false,
+      log: [],
+      proof: null,
+      ante: 3,
+      pot: 0,
+      focus: { a: null, b: null },
+      loadout: { a: null, b: null },
+      cap: freshCap(),
+      duel: freshDuel(),
+      duelUsed: false,
+      rematch: { a: false, b: false },
+      a: fighter(name, type, tokens),
+      b: null,
+    };
+  }
+
+  /**
+   * Move tokens between a wallet and the pot. Wallets never go below zero, so a
+   * trainer who cannot cover a fine pays what they have and nothing more.
+   * from / to: 'a', 'b' or 'pot'.
+   */
+  function transfer(m, from, to, amount, opts) {
+    const o = opts || {};
+    const cat = o.category || 'misc';
+    if (!amount || amount <= 0) return 0;
+
+    const source = from === 'pot' ? m.pot : (m[from] && m[from].tokens) || 0;
+    const moved = Math.min(amount, Math.max(0, source));
+    if (moved <= 0) return 0;
+
+    if (from === 'pot') {
+      m.pot -= moved;
+    } else {
+      m[from].tokens -= moved;
+      if (m[from].tok) m[from].tok[cat] = (m[from].tok[cat] || 0) - moved;
+    }
+
+    if (to === 'pot') {
+      m.pot += moved;
+    } else if (m[to]) {
+      m[to].tokens += moved;
+      if (m[to].tok) m[to].tok[cat] = (m[to].tok[cat] || 0) + moved;
+    }
+
+    if (o.log) pushLog(m, o.log.split('%n').join(String(moved)), o.tone || 'is-system');
+    return moved;
+  }
+
+  function pushLog(match, text, tone) {
+    const log = match.log || (match.log = []);
+    log.push({ text, tone: tone || 'is-system', at: Date.now() });
+    if (log.length > 24) log.splice(0, log.length - 24);
+    match.lastActAt = Date.now();
+  }
+
+  function randomLoadout(type) {
+    const pool = (POOLS[type] || POOLS.STUDY).slice();
+    for (let i = pool.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = pool[i];
+      pool[i] = pool[j];
+      pool[j] = tmp;
+    }
+    return pool.slice(0, LOADOUT_SIZE).map((move) => move.id);
+  }
+
+  function defaultMoves(type) {
+    return (POOLS[type] || POOLS.STUDY).slice(0, LOADOUT_SIZE).map((move) => move.id);
+  }
+
+  /**
+   * Opens a battle: both loadouts become the fighter's moveset, HP and PP are
+   * fresh, and each side antes from the wallet it brought to the room.
+   */
+  function openBattle(m) {
+    m.zone = 'battle';
+    m.battleNo = (m.battleNo || 0) + 1;
+    m.pot = 0;
+    m.focus = freshFocus();
+    m.winner = null;
+    m.rematch = { a: false, b: false };
+    m.proof = null;
+    m.cap = freshCap();
+    m.duel = freshDuel();
+    m.duelUsed = false;
+
+    ['a', 'b'].forEach((side) => {
+      const f = m[side];
+      if (!f) return;
+      const load = m.loadout && m.loadout[side];
+      f.startTokens = Math.max(0, f.tokens || 0);
+      f.tok = { combo: 0, cap: 0, ante: 0, pot: 0, leave: 0 };
+      f.hp = f.maxHp || MAX_HP;
+      f.status = 'none';
+      f.statusTurns = 0;
+      f.pp = {};
+      f.hits = 0;
+      f.supers = 0;
+      f.mins = 0;
+      f.sessions = 0;
+      f.proofs = 0;
+      f.bluff = 3;
+      f.fraud = false;
+      if (load) {
+        f.type = load.type;
+        f.moves = load.moves.slice();
+      }
+      if (!f.moves || !f.moves.length) f.moves = defaultMoves(f.type);
+      f.moves.forEach((id) => {
+        const move = moveById(id);
+        if (move) f.pp[id] = move.pp;
+      });
+      const stake = Math.min(Number(m.ante) || 0, f.tokens || 0);
+      transfer(m, side, 'pot', stake, { category: 'ante' });
+    });
+
+    lastTok.a = null;
+    lastTok.b = null;
+    lastTok.pot = null;
+    pushLog(m, `Antes paid — the Match Pot holds ${m.pot} 🪙.`, 'is-system');
+  }
+
+  function startBattle(m) {
+    m.zone = 'battle';
+    m.winner = null;
+    m.log = [];
+    pushLog(m, `${m.a.name} (${m.a.type}) VS ${m.b.name} (${m.b.type})`, 'is-system');
+    if (m.b && m.autoRival) pushLog(m, 'SOLO DEMO — the rival plays itself.', 'is-system');
+    openBattle(m);
+    pushLog(m, 'Every move is a real session. Longer timers hit harder.', 'is-system');
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 3. Rules                                                               */
+  /* ---------------------------------------------------------------------- */
+
+  /**
+   * Damage is time: the longer the session, the harder it lands. A LOCKED IN
+   * bonus (2 h+ of work while they carry a status) hits 1.5×, and a BURNED OUT
+   * trainer loses a slice of their own output.
+   */
+  function damageFor(move, atk, def) {
+    const combo = move.mins >= LONG_SESSION && def.status !== 'none' && def.status !== 'FRAUD';
+    let mult = combo ? 1.5 : 1;
+    if (atk.status === 'BURNOUT') mult *= 0.85;
+
+    const jitter = 0.94 + Math.random() * 0.12;
+    const dmg = Math.max(1, Math.round((move.power || 0) * mult * jitter));
+    return { dmg, combo };
+  }
+
+  function tickStatus(match, side, events) {
+    const f = match[side];
+    if (!f) return;
+    if (f.status === 'BURNOUT') {
+      f.hp = Math.max(0, f.hp - 5);
+      pushLog(match, `${f.name} is BURNED OUT (-5 HP)`, 'is-miss');
+      events.push('poison');
+    }
+    if (f.status === 'POISON') {
+      f.hp = Math.max(0, f.hp - 4);
+      pushLog(match, `${f.name} DOOMSCROLLED (-4 HP)`, 'is-miss');
+      events.push('poison');
+    }
+    if (f.statusTurns > 0) {
+      f.statusTurns -= 1;
+      if (f.statusTurns === 0) f.status = 'none';
+    }
+  }
+
+  function checkFaint(match) {
+    if (match.zone !== 'battle') return;
+    const sides = ['a', 'b'].filter((s) => match[s]);
+    const dead = sides.filter((s) => match[s].hp <= 0);
+    if (!dead.length) return;
+
+    match.zone = 'over';
+    match.focus = freshFocus(); // faint cancels every running session
+    const alive = sides.filter((s) => dead.indexOf(s) === -1);
+    match.winner = alive.length === 1 ? alive[0] : null;
+
+    dead.forEach((s) => pushLog(match, `${match[s].name} FAINTED!`, 'is-miss'));
+    if (match.winner) {
+      pushLog(match, `${match[match.winner].name} WINS THE MATCH!`, 'is-super');
+      // Winner takes the whole pot. Double KOs leave it on the table.
+      transfer(match, 'pot', match.winner, match.pot, {
+        category: 'pot',
+        log: `${match[match.winner].name} SWEEPS THE POT: %n 🪙`,
+        tone: 'is-super',
+      });
+    } else {
+      pushLog(match, 'DOUBLE FAINT. NOBODY WINS.', 'is-super');
+    }
+  }
+
+  /** All six moves dry would soft-lock the fight — hand out a second wind. */
+  function refillIfEmpty(match, side) {
+    const f = match[side];
+    if (!f) return;
+    const ids = f.moves && f.moves.length ? f.moves : defaultMoves(f.type);
+    const total = ids.reduce((sum, id) => {
+      const move = moveById(id);
+      const max = move ? move.pp : 1;
+      return sum + (f.pp[id] == null ? max : f.pp[id]);
+    }, 0);
+    if (total > 0) return;
+    ids.forEach((id) => {
+      const move = moveById(id);
+      if (move) f.pp[id] = move.pp;
+    });
+    pushLog(match, `${f.name} catches a second wind — PP restored!`, 'is-system');
+  }
+
+  /** One session landing. No turn flipping: each side runs its own clock. */
+  function applyMove(match, side, moveId, events) {
+    const foeSide = other(side);
+    const atk = match[side];
+    const def = match[foeSide];
+    const move = moveById(moveId);
+    if (!atk || !def || !move) return;
+    if (atk.hp <= 0 || def.hp <= 0) return;
+
+    // The hours are spent either way — sleep through them and you get nothing.
+    atk.sessions = (atk.sessions || 0) + 1;
+    atk.mins = (atk.mins || 0) + (move.mins || 0);
+
+    if (atk.status === 'SNOOZE' && Math.random() < 0.35) {
+      pushLog(match, `${atk.name} slept through ${move.name} — session wasted!`, 'is-miss');
+      events.push('miss');
+      return;
+    }
+    if (atk.status === 'PARALYSIS' && Math.random() < 0.3) {
+      pushLog(match, `${atk.name} is PARALYSED — ${move.name} slips away!`, 'is-miss');
+      events.push('miss');
+      return;
+    }
+
+    if (atk.pp[moveId] === undefined) atk.pp[moveId] = move.pp;
+    if (atk.pp[moveId] <= 0) {
+      pushLog(match, `No PP left for ${move.name}!`, 'is-miss');
+      events.push('error');
+      return;
+    }
+    atk.pp[moveId] -= 1;
+
+    pushLog(match, `${atk.name} finishes ${move.name} · ${durLabel(move.mins)}`, 'is-system');
+
+    if (move.cure) {
+      atk.status = 'none';
+      atk.statusTurns = 0;
+      pushLog(match, `${atk.name} shook off every status!`, 'is-system');
+    }
+
+    if (move.heal) {
+      const before = atk.hp;
+      atk.hp = Math.min(atk.maxHp, atk.hp + move.heal);
+      const gained = atk.hp - before;
+      if (gained > 0) {
+        pushLog(match, `Recovered ${gained} HP!`, 'is-system');
+        events.push('heal');
+      }
+    }
+
+    if (move.self && move.self.status) {
+      atk.status = move.self.status;
+      atk.statusTurns = 3;
+      pushLog(match, `${atk.name} is ${STATUS_LABEL[move.self.status]}!`, 'is-miss');
+    }
+
+    if (move.power > 0) {
+      const roll = damageFor(move, atk, def);
+      def.hp = Math.max(0, def.hp - roll.dmg);
+      atk.hits += 1;
+
+      if (roll.combo) {
+        atk.supers += 1;
+        pushLog(match, `LOCKED IN! ${move.mins} MINUTES LAND FOR -${roll.dmg} HP`, 'is-super');
+        events.push('super');
+        // LOCKED IN: out-working a slacking rival steals a token off them.
+        transfer(match, foeSide, side, 1, {
+          category: 'combo',
+          log: `LOCKED IN! ${atk.name} steals %n 🪙 from ${def.name}.`,
+          tone: 'is-super',
+        });
+      } else {
+        pushLog(match, `Hit for ${roll.dmg} damage.`, 'is-hit');
+        events.push('hit');
+      }
+    }
+
+    if (move.effect && def.hp > 0 && def.status === 'none') {
+      const chance = move.effect.chance == null ? 1 : move.effect.chance;
+      if (Math.random() < chance) {
+        def.status = move.effect.status;
+        def.statusTurns = 3;
+        pushLog(match, `${def.name} is now ${STATUS_LABEL[def.status]}!`, 'is-miss');
+      }
+    }
+
+    tickStatus(match, side, events);
+    checkFaint(match);
+  }
+
+  /**
+   * A pick starts a real session. The timer is the move's own length, the hit
+   * lands when it runs out, and no other move can be picked until then.
+   */
+  function startSession(match, side, moveId) {
+    const f = match[side];
+    const move = moveById(moveId);
+    if (!f || !move || match.zone !== 'battle') return false;
+    if (!match.focus) match.focus = freshFocus();
+    if (match.focus[side]) return false;
+    const now = Date.now();
+    match.focus[side] = {
+      moveId,
+      mins: move.mins,
+      startAt: now,
+      endAt: now + timerMs(match, move.mins),
+    };
+    pushLog(match, `${f.name} starts ${move.name} — ${durLabel(move.mins)} on the clock.`, 'is-system');
+    return true;
+  }
+
+  /** Timer up: the session pays out and that trainer is free to pick again. */
+  function resolveSession(match, side) {
+    const focus = match.focus && match.focus[side];
+    if (!focus || match.zone !== 'battle') return null;
+    if (Date.now() < focus.endAt) return null;
+    const move = moveById(focus.moveId);
+    match.focus[side] = null;
+    if (!move) return [];
+    const events = [];
+    applyMove(match, side, move.id, events);
+    if (match.zone === 'battle') refillIfEmpty(match, side);
+    return events;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 4. Sync helpers                                                        */
+  /* ---------------------------------------------------------------------- */
+
+  /*
+   * Every write goes through one queue. A room write is read-modify-write of
+   * the whole match, so two overlapping writes (say the session payout and the
+   * auto rival picking) would each save a snapshot missing the other's change —
+   * and a finished session could vanish. Queueing keeps this tab's writes
+   * ordered; two phones still race, which the README calls out.
+   */
+  let writeChain = Promise.resolve();
+
+  function publish(fn) {
+    const run = async () => {
+      const next = await HF.net.mutate(session.code, fn);
+      applyState(next, { local: true });
+      return next;
+    };
+    const queued = writeChain.then(run, run);
+    writeChain = queued.then(() => {}, () => {});
+    return queued;
+  }
+
+  function ensureShape(match) {
+    if (!match) return match;
+    if (!match.focus) match.focus = freshFocus();
+    if (!match.loadout) match.loadout = { a: null, b: null };
+    if (match.demo == null) match.demo = false;
+    return match;
+  }
+
+  /**
+   * Once a second: repaint the clocks and cash in any session whose time is up.
+   * Each client resolves only its own seat (plus the fake rival in solo mode),
+   * so two phones can never pay the same session out twice.
+   */
+  async function tick() {
+    if (!state || state.zone !== 'battle') return;
+    updateClocks();
+    // busy is deliberately not checked: a payout is queued behind whatever
+    // write is in flight, so a churning auto rival can never starve the clock.
+    if (ticking) return;
+
+    const mine = state.focus && state.focus[session.seat];
+    const foeSide = other(session.seat);
+    const theirs = state.autoRival && state.focus && state.focus[foeSide];
+    const now = Date.now();
+    const mineDue = mine && now >= mine.endAt;
+    const theirsDue = theirs && now >= theirs.endAt;
+    if (!mineDue && !theirsDue) return;
+
+    ticking = true;
+    const events = [];
+    try {
+      await publish((m) => {
+        if (m.zone !== 'battle') return;
+        const own = resolveSession(m, session.seat);
+        if (own) events.push(...own);
+        if (m.autoRival) {
+          const rivalEvents = resolveSession(m, foeSide);
+          if (rivalEvents) events.push(...rivalEvents);
+        }
+      });
+      events.forEach((name) => HF.sound.play(name));
+      if (events.indexOf('hit') !== -1 || events.indexOf('super') !== -1) {
+        HF.ui.hitSprite('foe');
+        HF.ui.shake();
+      }
+    } catch (err) {
+      /* the next tick retries */
+    } finally {
+      ticking = false;
+    }
+  }
+
+  function applyState(match, options) {
+    const opts = options || {};
+    if (!match) return;
+    ensureShape(match);
+    const prev = state;
+
+    state = match;
+    render(match);
+
+    if (!opts.local && prev && prev.code === match.code) detectRemote(prev, match);
+    maybeRecord(match);
+    maybeAutoPlay();
+  }
+
+  /** Play sounds on the *other* phone when its HP moves. */
+  function detectRemote(prev, next) {
+    const foe = next[other(session.seat)];
+    const foePrev = prev[other(session.seat)];
+    const me = next[session.seat];
+    const mePrev = prev[session.seat];
+
+    if (foe && foePrev && foe.hp < foePrev.hp) {
+      HF.ui.hitSprite('foe');
+      HF.ui.shake();
+      HF.sound.play(foe.hp <= 0 ? 'lose' : 'hit');
+    }
+    if (me && mePrev && me.hp < mePrev.hp) {
+      HF.ui.hitSprite('me');
+      HF.sound.play('poison');
+    }
+    if (prev.zone === 'battle' && next.zone === 'over') {
+      const iWon = next.winner === session.seat;
+      HF.sound.play(iWon ? 'win' : 'lose');
+      HF.ui.toast(iWon ? 'YOU WIN! ★' : 'YOU FAINTED…');
+    }
+    if (next.cap && next.cap.active && (!prev.cap || !prev.cap.active)) {
+      HF.sound.play('poison');
+    }
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 5. Rendering                                                           */
+  /* ---------------------------------------------------------------------- */
+
+  function go(layer) {
+    if (currentLayer === layer) return;
+    currentLayer = layer;
+    HF.ui.showLayer(layer);
+  }
+
+  function render(match) {
+    if (!match) return;
+    if (match.zone === 'lobby') {
+      go('lobby');
+      renderLobby(match);
+      return;
+    }
+    if (currentLayer === 'title' || currentLayer === 'history') {
+      renderHistory();
+    }
+    go('battle');
+    renderBattle(match);
+  }
+
+  function renderLobby(match) {
+    $('lobby-code').textContent = match.code;
+    $('device-room').textContent = 'ROOM ' + match.code;
+    $('slot-a-name').textContent = match.a ? `${match.a.name} · ${match.a.type}` : '—';
+    $('slot-b-name').textContent = match.b ? `${match.b.name} · ${match.b.type}` : (match.autoRival ? 'RIVAL (AUTO)' : 'waiting…');
+    $('slot-a-dot').classList.toggle('is-live', !!match.a);
+    $('slot-b-dot').classList.toggle('is-live', !!match.b);
+    $('lobby-hint').textContent = match.b
+      ? 'Pick a type and six moves, then lock in. Your rival approves the loadout.'
+      : 'Second trainer scans the QR or opens ' + HF.net.inviteLink(match.code);
+
+    const qr = $('invite-qr');
+    if (qr) {
+      const link = HF.net.inviteLink(match.code);
+      if (qr.dataset.link !== link) {
+        qr.dataset.link = link;
+        HF.qr.render(qr, link);
+      }
+    }
+
+    renderLoadout(match);
+  }
+
+  /* ---------------------------------------------------------------- loadout */
+
+  function myLoadout(match) {
+    return (match.loadout && match.loadout[session.seat]) || null;
+  }
+
+  function buildMovePicker() {
+    const wrap = $('ld-moves');
+    if (!wrap) return;
+    pickerType = session.pick.type;
+    const pool = POOLS[session.pick.type] || POOLS.STUDY;
+    wrap.innerHTML = pool.map((move) => (
+      `<button class="btn mv-pick" type="button" data-mv="${move.id}">
+        <span class="mv-name">${move.name}</span>
+        <span class="mv-meta">${durLabel(move.mins)} · ${move.power ? move.power + ' DMG' : 'SUPPORT'} · PP ${move.pp}</span>
+        <span class="mv-desc">${move.desc}</span>
+      </button>`
+    )).join('');
+  }
+
+  function renderLoadout(match) {
+    if (!match || !match.a) return;
+    const mine = myLoadout(match);
+
+    if (!session.pick.type || TYPES.indexOf(session.pick.type) === -1) {
+      session.pick.type = session.type || 'STUDY';
+    }
+    // Only a locked loadout is authoritative; while it is editable the pick is
+    // local, otherwise the poll would undo every type change.
+    if (mine && mine.locked) {
+      session.pick.type = mine.type;
+      session.pick.moves = mine.moves.slice();
+    }
+    if (pickerType !== session.pick.type) buildMovePicker();
+
+    // type buttons in the lobby mirror the live pick
+    $$('#loadout-types .type-btn').forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.type === session.pick.type);
+      btn.disabled = !!(mine && mine.locked);
+    });
+
+    const count = session.pick.moves.length;
+    $('ld-count').textContent = mine && mine.locked
+      ? `LOCKED · ${session.pick.type} · ${count} MOVES`
+      : `PICK 6 MOVES · ${count}/6`;
+    $('btn-lock').disabled = !!(mine && mine.locked) || count !== LOADOUT_SIZE;
+    $('btn-lock').textContent = mine && mine.locked ? '✓ LOADOUT LOCKED' : '🔒 LOCK LOADOUT';
+
+    $$('#ld-moves .mv-pick').forEach((btn) => {
+      const picked = session.pick.moves.indexOf(btn.dataset.mv) !== -1;
+      btn.classList.toggle('is-picked', picked);
+      btn.disabled = !!(mine && mine.locked) || (!picked && count >= LOADOUT_SIZE);
+    });
+
+    const otherSide = other(session.seat);
+    const rival = (match.loadout && match.loadout[otherSide]) || null;
+    const approved = !!(mine && mine.approved);
+    const status = $('ld-status');
+    // Same habit or no fight: a STUDY trainer cannot brawl with a GYM trainer.
+    const clash = !!(rival && rival.locked && rival.type !== session.pick.type);
+
+    if (clash) {
+      status.textContent = `TYPE CLASH — RIVAL IS ON ${rival.type}. BOTH SIDES MUST PICK ${rival.type}.`;
+    } else if (mine && mine.locked) {
+      if (approved) status.textContent = 'RIVAL APPROVED YOUR LOADOUT ✓';
+      else if (!rival || !rival.locked) status.textContent = 'WAITING FOR YOUR RIVAL TO BUILD A LOADOUT…';
+      else status.textContent = 'RIVAL HAS NOT APPROVED YOUR LOADOUT YET…';
+    } else if (rival && rival.locked) {
+      status.textContent = 'YOUR RIVAL IS READY. BUILD YOURS.';
+    } else {
+      status.textContent = 'SIX MOVES. NO MORE, NO LESS.';
+    }
+
+    const review = $('ld-review');
+    if (rival && rival.locked) {
+      review.hidden = false;
+      const names = (rival.moves || []).map((id) => {
+        const move = moveById(id);
+        return move ? move.name : id;
+      });
+      const total = (rival.moves || []).reduce((sum, id) => {
+        const move = moveById(id);
+        return sum + (move ? move.mins : 0);
+      }, 0);
+      $('ld-rival').textContent = `${rival.type} · ${names.join(' / ')} · ${durLabel(total)} TOTAL`;
+      $('btn-approve').disabled = !!rival.approved || !(mine && mine.locked) || clash;
+      $('btn-approve').textContent = rival.approved ? '✓ APPROVED' : 'APPROVE LOADOUT';
+      $('btn-reject').disabled = !!rival.approved;
+      const matchBtn = $('btn-match-type');
+      if (matchBtn) {
+        matchBtn.hidden = !clash;
+        matchBtn.textContent = `↺ SWITCH TO ${rival.type}`;
+      }
+    } else {
+      review.hidden = true;
+      const matchBtn = $('btn-match-type');
+      if (matchBtn) matchBtn.hidden = true;
+    }
+  }
+
+  /** Types are shared: one tap drops your locked loadout and joins their habit. */
+  async function matchRivalType() {
+    if (!state || state.zone !== 'lobby') return;
+    const rival = (state.loadout || {})[other(session.seat)];
+    if (!rival || !rival.locked || !rival.type) return;
+    const mine = myLoadout(state);
+    session.pick = { type: rival.type, moves: [] };
+    if (mine && mine.locked) {
+      await publish((m) => {
+        const own = m.loadout && m.loadout[session.seat];
+        if (own) {
+          own.locked = false;
+          own.approved = false;
+        }
+      });
+    }
+    buildMovePicker();
+    if (state) renderLoadout(state);
+    HF.ui.toast(`SWITCHED TO ${rival.type} — PICK SIX AND LOCK IN`);
+    HF.sound.play('select');
+  }
+
+  function pickMoveForLoadout(id) {
+    if (!state || state.zone !== 'lobby') return;
+    const mine = myLoadout(state);
+    if (mine && mine.locked) return;
+    const at = session.pick.moves.indexOf(id);
+    if (at !== -1) session.pick.moves.splice(at, 1);
+    else if (session.pick.moves.length < LOADOUT_SIZE) session.pick.moves.push(id);
+    else {
+      HF.ui.toast('SIX MOVES MAX — TAP ONE TO SWAP IT OUT', true);
+      return;
+    }
+    HF.sound.play('select');
+    renderLoadout(state);
+  }
+
+  /* ------------------------------------------------------------------ battle */
+
+  function renderBattle(match) {
+    const me = match[session.seat] || {};
+    const foe = match[other(session.seat)] || {};
+
+    $('device-room').textContent = 'ROOM ' + match.code + (match.demo ? ' · DEMO' : '');
+    $('foe-name').textContent = foe.name || 'RIVAL';
+    $('foe-name').nextElementSibling.textContent = foe.type || '—';
+    $('me-name').textContent = me.name || 'YOU';
+    $('me-type').textContent = me.type || 'STUDY';
+
+    HF.ui.setHP('foe', foe.hp || 0, foe.maxHp || MAX_HP);
+    HF.ui.setHP('me', me.hp || 0, me.maxHp || MAX_HP);
+    HF.ui.setStatus('foe', STATUS_LABEL[foe.status] || '');
+    HF.ui.setStatus('me', STATUS_LABEL[me.status] || '');
+
+    const flag = $('turnflag');
+    flag.classList.remove('is-rival', 'is-over');
+    const capOpen = !!(match.cap && match.cap.active);
+    const myFocus = (match.focus && match.focus[session.seat]) || null;
+    const foeFocus = (match.focus && match.focus[other(session.seat)]) || null;
+
+    if (match.zone === 'over') {
+      flag.textContent = match.winner === session.seat ? 'VICTORY!' : match.winner ? 'DEFEAT…' : 'DRAW';
+      flag.classList.add('is-over');
+      HF.ui.faintSprite('foe');
+    } else if (capOpen) {
+      flag.textContent = 'CAP CALL!';
+      flag.classList.add('is-rival');
+    } else if (myFocus) {
+      flag.textContent = 'IN SESSION · ' + clock(myFocus.endAt - Date.now());
+      flag.classList.add('is-rival');
+    } else if (foeFocus) {
+      flag.textContent = 'THEY ARE TRAINING';
+      flag.classList.add('is-rival');
+    } else {
+      flag.textContent = 'PICK A SESSION';
+    }
+
+    HF.ui.setText((match.log || []).slice(-3));
+
+    const hint = $('battle-hint');
+    if (hint) {
+      if (match.zone === 'over') {
+        hint.textContent = 'MATCH OVER — REMATCH, OR LEAVE FOR GOOD';
+      } else if (capOpen) {
+        hint.textContent = 'CAP CALL OPEN — NO MOVES UNTIL IT SETTLES';
+      } else if (myFocus) {
+        const picked = moveById(myFocus.moveId);
+        hint.textContent = `LOCKED IN: ${picked ? picked.name : 'SESSION'} · ${clock(myFocus.endAt - Date.now())} LEFT — NO NEW MOVE UNTIL IT ENDS`;
+      } else if (foeFocus) {
+        const picked = moveById(foeFocus.moveId);
+        hint.textContent = `RIVAL IS ON ${picked ? picked.name : 'A SESSION'} · PICK YOUR OWN`;
+      } else {
+        hint.textContent = 'PICK A SESSION · THE LONGER THE WORK, THE HARDER IT HITS';
+      }
+    }
+
+    const leaveBtn = $('btn-leave-match');
+    if (leaveBtn) {
+      if (match.zone === 'over') {
+        leaveArmed = false;
+        leaveBtn.classList.remove('is-armed');
+        leaveBtn.textContent = '◀ EXIT TO TITLE';
+      } else if (!leaveArmed) {
+        leaveBtn.textContent = `LEAVE · FORFEIT POT + ${LEAVE_FINE} 🪙`;
+      }
+    }
+
+    renderMoves(match);
+    renderProof(match, me);
+    renderTokens(match);
+    renderFocusBar(match);
+    renderRematch(match);
+
+    const chain = $('typechain');
+    if (chain) chain.textContent = `${me.type || 'STUDY'} SESSION · LONGER WORK = MORE DAMAGE`;
+
+    const myTokens = me.tokens == null ? 0 : me.tokens;
+    const canCall = !!me && (me.bluff || 0) > 0 && match.zone === 'battle' && myTokens > 0 && !capOpen;
+    const btnBluff = $('btn-bluff');
+    btnBluff.disabled = !canCall;
+    btnBluff.textContent = capOpen ? 'CAP OPEN' : 'CALL CAP · ' + (me.bluff == null ? 3 : me.bluff);
+
+    // Camera proof is only evidence when a cap call is pointed at you.
+    const iAmAccused = capOpen && match.cap.accused === session.seat && match.cap.stage !== 'judge';
+    $('btn-proof').disabled = !iAmAccused;
+    $('btn-proof').textContent = iAmAccused ? 'SHOW PROOF' : 'CAM PROOF';
+
+    $('btn-duel').disabled = match.zone !== 'battle' || match.duelUsed || !!(match.duel && match.duel.active) || capOpen;
+
+    maybeCapOverlay(match);
+    renderDuel(match);
+  }
+
+  /** Wallet + pot bar, with a floating pixel pop whenever a number moves. */
+  function renderTokens(match) {
+    const a = match.a || {};
+    const b = match.b || {};
+    const pot = match.pot || 0;
+    const tokA = a.tokens == null ? 0 : a.tokens;
+    const tokB = b.tokens == null ? 0 : b.tokens;
+
+    $('tok-a').textContent = tokA;
+    $('tok-b').textContent = tokB;
+    $('tok-pot').textContent = pot;
+    $('tok-a-name').textContent = (a.name || 'P1').slice(0, 7);
+    $('tok-b-name').textContent = (b.name || 'P2').slice(0, 7);
+
+    const brokeA = tokA <= 0;
+    const brokeB = tokB <= 0;
+    $('bankrupt-a').hidden = !brokeA;
+    $('bankrupt-b').hidden = !brokeB;
+    $('tok-a').classList.toggle('is-broke', brokeA);
+    $('tok-b').classList.toggle('is-broke', brokeB);
+
+    [['a', tokA], ['b', tokB], ['pot', pot]].forEach(([key, value]) => {
+      const prev = lastTok[key];
+      lastTok[key] = value;
+      if (prev == null || prev === value) return;
+      popTokens(key, value - prev);
+    });
+  }
+
+  function popTokens(key, delta) {
+    if (!delta) return;
+    const host = $('tok-' + key).closest('.tok-cell');
+    if (!host) return;
+    const el = document.createElement('span');
+    el.className = 'tok-pop' + (delta > 0 ? '' : ' is-down');
+    el.textContent = (delta > 0 ? '+' : '-') + Math.abs(delta) + ' 🪙';
+    host.appendChild(el);
+    setTimeout(() => el.remove(), 900);
+    HF.sound.play(delta > 0 ? 'coin' : 'coinDown');
+  }
+
+  function renderMoves(match) {
+    const me = match[session.seat];
+    const capOpen = !!(match.cap && match.cap.active);
+    const running = (match.focus && match.focus[session.seat]) || null;
+    // The lock-in: no second move until your own timer runs out.
+    const canAct = match.zone === 'battle' && !capOpen && !running;
+
+    const ids = (me && me.moves && me.moves.length) ? me.moves : defaultMoves(me ? me.type : 'STUDY');
+    const key = ids.join(',');
+    if (key !== builtKey) {
+      builtKey = key;
+      buildMoveButtons(ids);
+    }
+
+    $$('.move-btn').forEach((btn) => {
+      const move = moveById(btn.dataset.move);
+      if (!move) return;
+      const pp = me && me.pp[move.id] != null ? me.pp[move.id] : move.pp;
+      const active = !!running && running.moveId === move.id;
+      btn.querySelector('.pp').textContent = pp;
+      btn.disabled = !canAct || pp <= 0;
+      btn.classList.toggle('is-used', pp <= 0);
+      btn.classList.toggle('is-picked', active);
+      const note = btn.querySelector('.mv-note');
+      if (note) {
+        note.textContent = active
+          ? `IN SESSION · ${clock(running.endAt - Date.now())}`
+          : `${durLabel(move.mins)} OF WORK`;
+      }
+    });
+  }
+
+  function buildMoveButtons(ids) {
+    const wrap = $('moves');
+    if (!wrap) return;
+    wrap.innerHTML = ids.map((id) => {
+      const move = moveById(id);
+      if (!move) return '';
+      return `<button class="btn move-btn" type="button" data-move="${move.id}">
+        <span class="mv-name">${move.name}</span>
+        <span class="mv-meta">${durLabel(move.mins)} · <span class="pp">${move.pp}</span> PP · ${move.power ? move.power + ' DMG' : 'SUPPORT'}</span>
+        <span class="mv-note">${durLabel(move.mins)} OF WORK</span>
+      </button>`;
+    }).join('');
+  }
+
+  /* ------------------------------------------------------------- focus clock */
+
+  function paintFocusCell(which, focus) {
+    const what = $('focus-' + which + '-what');
+    const clockEl = $('focus-' + which + '-clock');
+    if (!what || !clockEl) return;
+    if (!focus) {
+      what.textContent = 'NO SESSION';
+      clockEl.textContent = 'READY';
+      clockEl.classList.remove('is-soon');
+      return;
+    }
+    const move = moveById(focus.moveId);
+    const left = focus.endAt - Date.now();
+    what.textContent = move ? move.name : 'SESSION';
+    clockEl.textContent = left > 0 ? clock(left) : 'DONE';
+    clockEl.classList.toggle('is-soon', left <= 0);
+  }
+
+  function renderFocusBar(match) {
+    if (!$('focus-me-what')) return;
+    const me = match[session.seat] || {};
+    const foe = match[other(session.seat)] || {};
+    $('focus-me-who').textContent = 'YOU · ' + (me.type || '—');
+    $('focus-foe-who').textContent = (foe.name || 'RIVAL').slice(0, 8) + ' · ' + (foe.type || '—');
+    paintFocusCell('me', (match.focus && match.focus[session.seat]) || null);
+    paintFocusCell('foe', (match.focus && match.focus[other(session.seat)]) || null);
+  }
+
+  /** Cheap once-a-second refresh: only the clocks, never a full redraw. */
+  function updateClocks() {
+    if (!state || state.zone !== 'battle' || !$('focus-me-what')) return;
+    const mine = (state.focus && state.focus[session.seat]) || null;
+    const theirs = (state.focus && state.focus[other(session.seat)]) || null;
+    paintFocusCell('me', mine);
+    paintFocusCell('foe', theirs);
+    if (!mine) return;
+
+    const left = clock(mine.endAt - Date.now());
+    const move = moveById(mine.moveId);
+    const capOpen = !!(state.cap && state.cap.active);
+    const flag = $('turnflag');
+    if (flag && !capOpen && state.zone === 'battle') flag.textContent = 'IN SESSION · ' + left;
+    const hint = $('battle-hint');
+    if (hint && !capOpen) {
+      hint.textContent = `LOCKED IN: ${move ? move.name : 'SESSION'} · ${left} LEFT — NO NEW MOVE UNTIL IT ENDS`;
+    }
+    const note = document.querySelector(`.move-btn[data-move="${mine.moveId}"] .mv-note`);
+    if (note) note.textContent = 'IN SESSION · ' + left;
+  }
+
+  function renderRematch(match) {
+    const btn = $('btn-rematch');
+    if (!btn) return;
+    if (match.zone !== 'over') {
+      btn.hidden = true;
+      return;
+    }
+    btn.hidden = false;
+    const votes = match.rematch || {};
+    const mine = !!votes[session.seat];
+    const theirs = !!votes[other(session.seat)];
+    btn.disabled = mine;
+    btn.textContent = mine
+      ? (theirs ? 'BOTH IN — STARTING…' : 'WAITING FOR RIVAL · 1/2')
+      : (theirs ? '⟳ ACCEPT REMATCH · THEY ASKED' : '⟳ REMATCH');
+  }
+
+  function renderProof(match, me) {
+    const strip = $('proofstrip');
+    if (!match.proof || !match.proof.src) {
+      strip.hidden = true;
+      return;
+    }
+    strip.hidden = false;
+    $('proof-thumb').src = match.proof.src;
+    const who = match[match.proof.by] ? match[match.proof.by].name : 'SOMEONE';
+    $('proof-meta').textContent = `${who} · ${match.proof.pose} · proofs sent: ${me.proofs || 0}`;
+  }
+
+  /* --------------------------------------------------------------------- cap */
+
+  function maybeCapOverlay(match) {
+    const cap = match.cap;
+    if (!cap) return;
+    const open = document.querySelector('#cap:not([hidden])');
+
+    if (cap.active) {
+      const key = `${cap.at}:${cap.stage}`;
+      if (key !== seenCapKey) {
+        seenCapKey = key;
+        renderCap(match);
+        HF.ui.overlay('cap', true);
+      }
+    } else {
+      seenCapKey = '';
+      if (open) {
+        HF.ui.overlay('cap', false);
+        if (cap.result) {
+          HF.ui.toast(
+            cap.result === 'legit' ? 'PROOF ACCEPTED — YOU PAID 1 🪙'
+              : cap.result === 'guilty' ? 'CALL STOOD — THEY TOOK -25'
+              : 'CALL DROPPED'
+          );
+        }
+      }
+    }
+  }
+
+  function renderCap(match) {
+    const cap = match.cap || {};
+    const accused = match[cap.accused] || {};
+    const accuser = match[cap.by] || {};
+    const iAmAccused = cap.accused === session.seat;
+    const iAmAccuser = cap.by === session.seat;
+    const stage = cap.stage || 'answer';
+    const src = cap.proof || '';
+
+    $('cap-head').textContent = stage === 'judge' ? 'PROOF SUBMITTED' : 'CALLED CAP';
+
+    if (iAmAccused && stage === 'answer') {
+      $('cap-sub').textContent = `${accuser.name || 'YOUR RIVAL'} says you're capping. No system checks the photo — you show it, they decide.`;
+    } else if (iAmAccused) {
+      $('cap-sub').textContent = `Photo sent. ${accuser.name || 'YOUR RIVAL'} is judging it now.`;
+    } else if (iAmAccuser && stage === 'judge') {
+      $('cap-sub').textContent = `${accused.name || 'THEY'} sent a photo. It proves nothing on its own — look at it and call it.`;
+    } else {
+      $('cap-sub').textContent = `You called cap on ${accused.name || 'your rival'}. Waiting for a photo or a concession.`;
+    }
+
+    const img = $('cap-img');
+    if (src) img.src = src;
+    else img.removeAttribute('src');
+    $('cap-photo').classList.toggle('is-empty', !src);
+
+    $('btn-cap-proof').hidden = !(iAmAccused && stage === 'answer');
+    $('btn-cap-hit').hidden = !(iAmAccused && stage === 'answer');
+    $('btn-cap-accept').hidden = !(iAmAccuser && stage === 'judge');
+    $('btn-cap-reject').hidden = !(iAmAccuser && stage === 'judge');
+    $('btn-cap-cancel').hidden = !iAmAccuser;
+
+    $('cap-hint').textContent = iAmAccused && stage === 'answer'
+      ? `No proof = -${CAP_DMG} HP, FRAUD and ${CAP_FINE} 🪙 to them. A photo buys you their judgement, not a free pass.`
+      : iAmAccuser && stage === 'judge'
+        ? `Accept it: you pay ${FALSE_CALL_FINE} 🪙, no damage. Reject it and the call stands: they take -${CAP_DMG} and pay you ${CAP_FINE}.`
+        : iAmAccuser ? 'They either show a photo or take the hit. You can drop the call at any time.'
+          : 'Your rival decides what the photo is worth.';
+  }
+
+  /* ------------------------------------------------------------ focus duel */
+
+  function renderDuel(match) {
+    const duel = match.duel || {};
+    const btn = $('btn-focus-tap');
+    if (!btn) return;
+
+    if (!duel.active) {
+      btn.hidden = true;
+      focusArmed = false;
+      focusStart = 0;
+      clearTimeout(focusTimer);
+      return;
+    }
+
+    const results = duel.results || {};
+    const mine = results[session.seat];
+    if (mine != null) {
+      btn.hidden = false;
+      btn.disabled = true;
+      btn.textContent = 'FOCUS ' + Math.round(mine) + 'MS · WAITING';
+      return;
+    }
+
+    btn.hidden = false;
+    if (focusArmed) return; // leave WAIT… / TAP NOW! alone while the timer runs
+    armFocus();
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 6. Actions                                                             */
+  /* ---------------------------------------------------------------------- */
+
+  async function createMatch() {
+    try {
+      const code = HF.net.newCode();
+      const match = newMatch(code, session.name, session.type, session.account.tokens);
+      match.ante = Math.min(Number(session.ante) || 3, session.account.tokens);
+      pushLog(match, `${match.a.name} opens a match. Ante set to ${match.ante} 🪙 each.`, 'is-system');
+      await HF.net.write(code, match);
+      session.seat = 'a';
+      session.code = code;
+      session.pick = { type: session.type, moves: [] };
+      session.recordedKey = null;
+      sessionStorage.setItem('hf:seat:' + code, 'a');
+      localStorage.setItem('hf:last', code);
+      HF.net.start(code, applyState);
+      state = match;
+      go('lobby');
+      renderLobby(match);
+      HF.sound.play('join');
+    } catch (err) {
+      HF.ui.toast('COULD NOT CREATE ROOM: ' + err.message, true);
+    }
+  }
+
+  async function joinMatch() {
+    const code = ($('join-code').value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    if (code.length < 4) {
+      HF.ui.toast('TYPE THE 5-LETTER ROOM CODE', true);
+      return;
+    }
+    try {
+      const match = await HF.net.read(code);
+      if (!match) {
+        HF.ui.toast('NO ROOM CALLED ' + code, true);
+        return;
+      }
+      if (match.b) {
+        HF.ui.toast('ROOM IS FULL — START YOUR OWN', true);
+        return;
+      }
+      const next = await HF.net.mutate(code, (m) => {
+        m.b = fighter(session.name, session.type, session.account.tokens);
+        if (m.zone !== 'lobby') m.zone = 'lobby';
+        pushLog(m, `${m.b.name} joins the match.`, 'is-system');
+      });
+      session.seat = 'b';
+      session.code = code;
+      session.pick = { type: session.type, moves: [] };
+      session.recordedKey = null;
+      sessionStorage.setItem('hf:seat:' + code, 'b');
+      localStorage.setItem('hf:last', code);
+      HF.net.start(code, applyState);
+      state = next;
+      go('lobby');
+      renderLobby(next);
+      HF.sound.play('join');
+    } catch (err) {
+      HF.ui.toast('JOIN FAILED: ' + err.message, true);
+    }
+  }
+
+  /** Both loadouts must be locked and approved *for the current generation*,
+   *  so a stale approval from last match can never restart the battle. */
+  function readyToFight(m) {
+    const L = m.loadout || {};
+    const gen = m.loadoutGen || 0;
+    if (!L.a || !L.b) return false;
+    // One habit per fight: different types never start a battle.
+    if (L.a.type !== L.b.type) return false;
+    return !!(L.a.locked && L.b.locked && L.a.approved && L.b.approved &&
+      (L.a.gen || 0) === gen && (L.b.gen || 0) === gen);
+  }
+
+  async function lockLoadout() {
+    if (!state || state.zone !== 'lobby') return;
+    const type = session.pick.type;
+    const moves = session.pick.moves.slice();
+    if (moves.length !== LOADOUT_SIZE) {
+      HF.ui.toast('PICK EXACTLY SIX MOVES', true);
+      return;
+    }
+    await publish((m) => {
+      if (m.zone !== 'lobby' || !m[session.seat]) return;
+      m.loadout = m.loadout || { a: null, b: null };
+      m.loadout[session.seat] = {
+        type,
+        moves,
+        locked: true,
+        approved: false,
+        gen: m.loadoutGen || 0,
+      };
+      m[session.seat].type = type;
+      pushLog(m, `${m[session.seat].name} locked a ${type} loadout.`, 'is-system');
+      if (m.autoRival && session.seat === 'a') {
+        // One person playing both seats: the rival mirrors your habit, so the
+        // same-type rule holds without a second human.
+        m.loadout.a.approved = true;
+        if (m.loadout.b) {
+          m.loadout.b.type = type;
+          m.loadout.b.moves = randomLoadout(type);
+          m.loadout.b.locked = true;
+          m.loadout.b.approved = true;
+          m.loadout.b.gen = m.loadoutGen || 0;
+        }
+        if (m.b) m.b.type = type;
+      }
+      if (readyToFight(m)) startBattle(m);
+    });
+    HF.sound.play('join');
+    if (state.zone === 'battle') HF.ui.reviveSprites();
+  }
+
+  async function approveLoadout() {
+    if (!state || state.zone !== 'lobby') return;
+    const rivalSide = other(session.seat);
+    await publish((m) => {
+      if (m.zone !== 'lobby' || !m.loadout || !m.loadout[rivalSide]) return;
+      m.loadout[rivalSide].approved = true;
+      pushLog(m, `${m[session.seat].name} approves the rival loadout.`, 'is-system');
+      if (readyToFight(m)) startBattle(m);
+    });
+    HF.sound.play('select');
+    if (state.zone === 'battle') HF.ui.reviveSprites();
+  }
+
+  async function rejectLoadout() {
+    if (!state || state.zone !== 'lobby') return;
+    const rivalSide = other(session.seat);
+    await publish((m) => {
+      if (!m.loadout || !m.loadout[rivalSide]) return;
+      m.loadout[rivalSide].locked = false;
+      m.loadout[rivalSide].approved = false;
+      pushLog(m, `${m[session.seat].name} sent the rival back to the drawing board.`, 'is-system');
+    });
+    HF.ui.toast('LOADOUT REJECTED — THEY HAVE TO REBUILD', true);
+    HF.sound.play('error');
+  }
+
+  async function startSolo() {
+    if (!state || state.zone !== 'lobby') return;
+    if (session.seat !== 'a') {
+      HF.ui.toast('ONLY THE HOST CAN RUN THE SOLO DEMO', true);
+      return;
+    }
+    const foeSide = other(session.seat);
+    const type = session.pick.type; // same habit, or the match cannot start
+    await publish((m) => {
+      m[foeSide] = fighter('RIVAL', type, session.account.tokens);
+      m.autoRival = true;
+      m.loadout = m.loadout || { a: null, b: null };
+      m.loadout[foeSide] = {
+        type,
+        moves: randomLoadout(type),
+        locked: true,
+        approved: true,
+        gen: m.loadoutGen || 0,
+      };
+      pushLog(m, `SOLO DEMO — ${m[foeSide].name} (${type}) steps up. AUTO-RIVAL ON.`, 'is-system');
+    });
+    HF.ui.toast('AUTO-RIVAL ON · build your loadout to start');
+    HF.sound.play('join');
+  }
+
+  /**
+   * Picking a move locks you in for its full length. The damage lands when the
+   * timer ends; until then every move button stays dead.
+   */
+  async function pickMove(moveId) {
+    if (busy || !state || state.zone !== 'battle') return;
+    if (state.cap && state.cap.active) {
+      HF.ui.toast('SETTLE THE CAP CALL FIRST', true);
+      return;
+    }
+    const me = state[session.seat];
+    const move = moveById(moveId);
+    if (!me || !move) return;
+    if ((me.moves || []).indexOf(moveId) === -1) return;
+
+    const running = state.focus && state.focus[session.seat];
+    if (running) {
+      HF.ui.toast(`IN SESSION · ${clock(running.endAt - Date.now())} LEFT`, true);
+      return;
+    }
+
+    const pp = me.pp[moveId] == null ? move.pp : me.pp[moveId];
+    if (pp <= 0) {
+      HF.ui.toast('NO PP LEFT ON THAT MOVE', true);
+      return;
+    }
+
+    busy = true;
+    try {
+      await publish((m) => {
+        if (m.zone !== 'battle') return;
+        if (m.cap && m.cap.active) return;
+        startSession(m, session.seat, moveId);
+      });
+      HF.sound.play('join');
+    } catch (err) {
+      HF.ui.toast('MOVE FAILED TO SYNC: ' + err.message, true);
+    } finally {
+      busy = false;
+      maybeAutoPlay();
+    }
+  }
+
+  /* ---------------------------------------------------------------- camera */
+
+  function openCamera() {
+    if (!state || state.zone !== 'battle') {
+      HF.ui.toast('PROOF ONLY EXISTS IN A BATTLE', true);
+      return;
+    }
+    const cap = state.cap || {};
+    const allowed = cap.active && cap.accused === session.seat && cap.stage !== 'judge';
+    if (!allowed) {
+      HF.ui.toast('CAM PROOF IS ONLY FOR ANSWERING A CAP CALL', true);
+      return;
+    }
+    HF.camera.open({
+      onCapture: async (shot) => {
+        try {
+          await publish((m) => {
+            if (!m.cap || !m.cap.active || m.cap.accused !== session.seat) return;
+            m.cap.proof = shot.src;
+            m.cap.stage = 'judge';
+            m.proof = { src: shot.src, pose: shot.pose, by: session.seat, at: shot.at };
+            const me = m[session.seat];
+            me.proofs = (me.proofs || 0) + 1;
+            pushLog(m, `PROOF SENT — ${shot.pose}. The accuser decides.`, 'is-system');
+          });
+          HF.ui.toast('PROOF SENT · WAITING FOR THEIR CALL');
+          HF.sound.play('heal');
+        } catch (err) {
+          HF.ui.toast('PROOF FAILED TO SYNC', true);
+        }
+      },
+    });
+  }
+
+  /** Closing the camera without a photo must not strand an open cap call. */
+  function reopenCapIfOpen() {
+    if (state && state.cap && state.cap.active && state.cap.accused === session.seat) {
+      renderCap(state);
+      HF.ui.overlay('cap', true);
+    }
+  }
+
+  /* -------------------------------------------------------------------- cap */
+
+  /**
+   * Settles an open cap call in place.
+   *   legit   → the accuser accepts the photo: pays 1 🪙, nobody bleeds.
+   *   guilty  → the accused concedes or the photo is rejected: -25, FRAUD, -2 🪙.
+   *   dropped → the accuser backs out, nobody is hurt.
+   */
+  function settleCap(m, kind) {
+    const cap = m.cap || {};
+    if (!cap.active) return;
+    const accuser = m[cap.by];
+    const accused = m[cap.accused];
+
+    cap.active = false;
+    cap.result = kind;
+    cap.at = Date.now();
+
+    if (kind === 'legit' && accuser) {
+      pushLog(m, `PROOF ACCEPTED — ${accuser.name} stands down.`, 'is-system');
+      transfer(m, cap.by, cap.accused, FALSE_CALL_FINE, {
+        category: 'cap',
+        log: `FALSE CALL FEE — ${accuser.name} pays %n 🪙 to ${accused.name}.`,
+        tone: 'is-hit',
+      });
+    } else if (kind === 'guilty' && accused) {
+      accused.hp = Math.max(0, accused.hp - CAP_DMG);
+      accused.status = 'FRAUD';
+      accused.statusTurns = 3;
+      accused.fraud = true;
+      pushLog(m, cap.proof
+        ? `${accuser.name} REJECTS THE PHOTO — ${accused.name} takes -${CAP_DMG} HP and FRAUD.`
+        : `NO PROOF — ${accused.name} was capping (-${CAP_DMG} HP, FRAUD).`, 'is-super');
+      transfer(m, cap.accused, cap.by, CAP_FINE, {
+        category: 'cap',
+        log: `${accused.name} pays the %n 🪙 CAP FINE to ${accuser.name}.`,
+        tone: 'is-super',
+      });
+    } else if (accuser) {
+      pushLog(m, `${accuser.name} drops the call. No damage.`, 'is-system');
+    }
+
+    if (m.proof) m.proof.capResult = kind;
+    m.cap.proof = null;
+    checkFaint(m);
+  }
+
+  async function callCap() {
+    if (!state || state.zone !== 'battle') return;
+    if (state.cap && state.cap.active) {
+      renderCap(state);
+      HF.ui.overlay('cap', true);
+      return;
+    }
+
+    const me = state[session.seat];
+    if (!me || (me.bluff || 0) <= 0) {
+      HF.ui.toast('OUT OF CAP CALLS', true);
+      return;
+    }
+    if ((me.tokens || 0) <= 0) {
+      HF.ui.toast('BANKRUPT - NO TOKENS TO STAKE', true);
+      return;
+    }
+
+    await publish((m) => {
+      const mine = m[session.seat];
+      const foeSide = other(session.seat);
+      mine.bluff = Math.max(0, (mine.bluff || 0) - 1);
+      m.cap = {
+        active: true,
+        by: session.seat,
+        accused: foeSide,
+        stage: 'answer',
+        at: Date.now(),
+        result: null,
+        proof: null,
+      };
+      pushLog(m, `${mine.name} CALLS CAP! ${m[foeSide].name} must show proof.`, 'is-super');
+    });
+
+    HF.sound.play('poison');
+    if (state.cap) seenCapKey = `${state.cap.at}:${state.cap.stage}`;
+    renderCap(state);
+    HF.ui.overlay('cap', true);
+  }
+
+  async function answerCap(kind) {
+    if (!state || !state.cap || !state.cap.active) return;
+    const cap = state.cap;
+    if (kind === 'cancel' || kind === 'legit' || kind === 'reject') {
+      if (cap.by !== session.seat) return;
+    } else if (cap.accused !== session.seat) {
+      return;
+    }
+
+    const result = kind === 'reject' ? 'guilty' : kind;
+    if (kind === 'reject' && !cap.proof) {
+      HF.ui.toast('THERE IS NO PHOTO TO REJECT', true);
+      return;
+    }
+
+    await publish((m) => settleCap(m, result));
+    HF.ui.overlay('cap', false);
+    HF.ui.toast(
+      kind === 'concede' || kind === 'reject' ? 'CALL STOOD · -25 HP'
+        : kind === 'legit' ? 'PROOF ACCEPTED · -1 🪙'
+        : 'CALL DROPPED'
+    );
+    HF.sound.play(kind === 'concede' || kind === 'reject' ? 'miss' : 'select');
+  }
+
+  /* ------------------------------------------------------------ focus duel */
+
+  async function startDuel() {
+    if (!state || state.zone !== 'battle') return;
+    if (state.duelUsed || (state.duel && state.duel.active)) return;
+    if (state.cap && state.cap.active) {
+      HF.ui.toast('SETTLE THE CAP CALL FIRST', true);
+      return;
+    }
+    await publish((m) => {
+      m.duelUsed = true;
+      m.duel = { active: true, by: session.seat, results: {}, at: Date.now() };
+      pushLog(m, 'FOCUS DUEL! Both phones wait for TAP NOW, then tap.', 'is-system');
+    });
+    HF.ui.toast('FOCUS DUEL · tap the panel when it turns green');
+    HF.sound.play('select');
+    armFocus();
+  }
+
+  /** Both clients arm themselves: first WAIT…, then TAP NOW! */
+  function armFocus() {
+    const duel = state && state.duel;
+    if (!duel || !duel.active) return;
+    if (duel.results && duel.results[session.seat] != null) return;
+    if (focusArmed) return;
+
+    focusArmed = true;
+    focusStart = 0;
+    const btn = $('btn-focus-tap');
+    btn.hidden = false;
+    btn.disabled = true;
+    btn.textContent = 'WAIT…';
+
+    clearTimeout(focusTimer);
+    focusTimer = setTimeout(() => {
+      if (!state || !state.duel || !state.duel.active) return;
+      focusStart = performance.now();
+      btn.disabled = false;
+      btn.textContent = 'TAP NOW!';
+      HF.sound.play('select');
+    }, 1200 + Math.random() * 2400);
+  }
+
+  async function tapFocus() {
+    const duel = state && state.duel;
+    if (!duel || !duel.active) return;
+    if (!focusStart) return;
+    const ms = Math.round(performance.now() - focusStart);
+    focusStart = 0;
+    focusArmed = false;
+    clearTimeout(focusTimer);
+    $('btn-focus-tap').disabled = true;
+    $('btn-focus-tap').textContent = 'FOCUS ' + ms + 'MS';
+
+    let next = null;
+    try {
+      next = await publish((m) => {
+        if (!m.duel || !m.duel.active) return;
+        if (!m.duel.results) m.duel.results = {};
+        m.duel.results[session.seat] = ms;
+      });
+    } catch (err) {
+      HF.ui.toast('DUEL FAILED TO SYNC', true);
+      return;
+    }
+    HF.sound.play('hit');
+    if (next && next.duel && next.duel.results && next.duel.results.a != null && next.duel.results.b != null) {
+      await resolveDuel();
+    }
+  }
+
+  async function resolveDuel() {
+    if (!state || !state.duel || !state.duel.active) return;
+    const results = state.duel.results || {};
+    if (results.a == null || results.b == null) return;
+
+    await publish((m) => {
+      const d = m.duel;
+      if (!d || !d.active) return;
+      if (!d.results || d.results.a == null || d.results.b == null) return;
+      d.active = false;
+      const loserSide = d.results.a <= d.results.b ? 'b' : 'a';
+      const winnerSide = other(loserSide);
+      const loser = m[loserSide];
+      loser.hp = Math.max(0, loser.hp - DUEL_DMG);
+      loser.status = 'SNOOZE';
+      loser.statusTurns = 3;
+      pushLog(m, `FOCUS DUEL: ${m[winnerSide].name} reacts faster (${d.results[winnerSide]}ms)`, 'is-super');
+      pushLog(m, `${loser.name} takes ${DUEL_DMG} HP and falls asleep.`, 'is-hit');
+      checkFaint(m);
+    });
+    HF.sound.play('super');
+  }
+
+  /* ---------------------------------------------------------------- rematch */
+
+  /** Both agreed: back to the lobby so types and moves can change (and be re-approved). */
+  function openRematchLobby(m) {
+    m.zone = 'lobby';
+    m.winner = null;
+    m.rematch = { a: false, b: false };
+    m.focus = freshFocus();
+    m.proof = null;
+    m.cap = freshCap();
+    m.duel = freshDuel();
+    m.log = [];
+    m.loadoutGen = (m.loadoutGen || 0) + 1;
+    ['a', 'b'].forEach((side) => {
+      const load = m.loadout && m.loadout[side];
+      if (!load) return;
+      load.locked = false;
+      load.approved = false;
+    });
+    pushLog(m, 'REMATCH — both agreed. Change your type and moves, then lock again.', 'is-system');
+  }
+
+  async function rematch() {
+    if (!state || state.zone !== 'over') return;
+    await publish((m) => {
+      if (m.zone !== 'over') return;
+      m.rematch = m.rematch || { a: false, b: false };
+      if (m.rematch[session.seat]) return;
+      m.rematch[session.seat] = true;
+      const votes = (m.rematch.a ? 1 : 0) + (m.rematch.b ? 1 : 0);
+      pushLog(m, `${m[session.seat].name} wants a rematch (${votes}/2).`, 'is-system');
+
+      if (m.rematch.a && m.rematch.b) openRematchLobby(m);
+    });
+    HF.sound.play('join');
+    HF.ui.reviveSprites();
+    session.recordedKey = null;
+  }
+
+  /* ------------------------------------------------------------ leave/forfeit */
+
+  function quitToTitle() {
+    if (state && state[session.seat] && state.zone === 'battle') {
+      session.account.tokens = Math.max(0, state[session.seat].tokens || 0);
+      saveAccount();
+    }
+    HF.net.stop();
+    session.code = null;
+    session.seat = null;
+    state = null;
+    builtKey = '';
+    leaveArmed = false;
+    clearTimeout(leaveTimer);
+    go('title');
+    renderAccountLine();
+  }
+
+  /**
+   * Two taps: the first arms the button, the second forfeits. The walker pays
+   * the fine, the rival takes the match and the pot.
+   */
+  async function leaveMatch() {
+    if (!state) return;
+    if (state.zone === 'over') {
+      quitToTitle();
+      return;
+    }
+
+    const btn = $('btn-leave-match');
+    if (!leaveArmed) {
+      leaveArmed = true;
+      btn.classList.add('is-armed');
+      btn.textContent = `TAP AGAIN · LOSE POT + ${LEAVE_FINE} 🪙`;
+      clearTimeout(leaveTimer);
+      leaveTimer = setTimeout(() => {
+        leaveArmed = false;
+        btn.classList.remove('is-armed');
+        btn.textContent = `LEAVE · FORFEIT POT + ${LEAVE_FINE} 🪙`;
+      }, LEAVE_ARM_MS);
+      HF.sound.play('select');
+      return;
+    }
+
+    leaveArmed = false;
+    clearTimeout(leaveTimer);
+    btn.classList.remove('is-armed');
+    btn.textContent = `LEAVE · FORFEIT POT + ${LEAVE_FINE} 🪙`;
+
+    const foeSide = other(session.seat);
+    if (!state[session.seat] || !state[foeSide]) return;
+
+    try {
+      await publish((m) => {
+        if (m.zone !== 'battle' || !m[session.seat] || !m[foeSide]) return;
+        const me = m[session.seat];
+        const rivalName = m[foeSide].name;
+        const potValue = m.pot || 0;
+        // Walking out forfeits the ante sitting in the pot and pays the fine on
+        // top of it. The rival collects both.
+        m.zone = 'over';
+        m.winner = foeSide;
+        m.focus = freshFocus();
+        transfer(m, 'pot', foeSide, potValue, {
+          category: 'pot',
+          log: `FORFEITED POT — ${rivalName} takes the %n 🪙 pot.`,
+          tone: 'is-super',
+        });
+        transfer(m, session.seat, foeSide, LEAVE_FINE, {
+          category: 'leave',
+          log: `WALKOUT FINE — ${me.name} pays %n 🪙 more to ${rivalName}.`,
+          tone: 'is-miss',
+        });
+        pushLog(m, `${rivalName} WINS — ${me.name} FORFEITED THE POT AND ${LEAVE_FINE} 🪙.`, 'is-super');
+      });
+      HF.ui.toast(`FORFEITED · POT + ${LEAVE_FINE} 🪙 TO RIVAL`, true);
+      HF.sound.play('lose');
+    } catch (err) {
+      HF.ui.toast('COULD NOT LEAVE: ' + err.message, true);
+    }
+  }
+
+  /* -------------------------------------------------------------- token lab */
+
+  /** Dev-only: fire any token rule by hand so the demo can show them on cue. */
+  async function tokenLab(kind) {
+    if (!state || !session.code || state.zone !== 'battle') {
+      HF.ui.toast('START A BATTLE FIRST', true);
+      return;
+    }
+    const foe = other(session.seat);
+
+    await publish((m) => {
+      const me = m[session.seat];
+
+      switch (kind) {
+        case 'gain':
+          transfer(m, 'pot', session.seat, 1, { category: 'pot', log: `DEV: ${me.name} pulls %n 🪙 out of the pot.` });
+          break;
+        case 'lose':
+          transfer(m, session.seat, 'pot', 1, { category: 'ante', log: `DEV: ${me.name} drops %n 🪙 in the pot.` });
+          break;
+        case 'steal':
+          transfer(m, foe, session.seat, 1, { category: 'combo', log: `DEV: LOCKED IN — ${me.name} steals %n 🪙.`, tone: 'is-super' });
+          break;
+        case 'cap-guilty':
+          m.cap = { active: true, by: session.seat, accused: foe, stage: 'answer', at: Date.now(), result: null, proof: null };
+          settleCap(m, 'guilty');
+          break;
+        case 'cap-legit':
+          m.cap = { active: true, by: session.seat, accused: foe, stage: 'judge', at: Date.now(), result: null, proof: null };
+          settleCap(m, 'legit');
+          break;
+        case 'sweep':
+          transfer(m, 'pot', session.seat, m.pot, { category: 'pot', log: `DEV: ${me.name} sweeps the pot: %n 🪙.`, tone: 'is-super' });
+          break;
+        case 'bankrupt':
+          transfer(m, session.seat, 'pot', me.tokens, { category: 'ante', log: `DEV: ${me.name} is BANKRUPT.` });
+          break;
+        case 'reset':
+          me.tokens = 50;
+          m.pot = 0;
+          pushLog(m, 'DEV: wallet back to 50 🪙.', 'is-system');
+          break;
+        case 'finish':
+          // Dev only: drop the clock to zero so the payout can be shown now.
+          if (m.focus[session.seat]) m.focus[session.seat].endAt = Date.now() - 1;
+          break;
+        case 'demo':
+          // Demo clock lives on the room, so one tap flips both phones.
+          m.demo = !m.demo;
+          ['a', 'b'].forEach((side) => {
+            const active = m.focus && m.focus[side];
+            if (active) active.endAt = active.startAt + timerMs(m, active.mins);
+          });
+          pushLog(m, m.demo
+            ? 'DEV: DEMO CLOCK ON — 2H SESSIONS TAKE 5 SECONDS.'
+            : 'DEV: REAL CLOCK BACK ON.', 'is-system');
+          break;
+        case 'ko':
+          if (m[foe]) m[foe].hp = 0;
+          checkFaint(m);
+          break;
+        default:
+          break;
+      }
+    });
+
+    HF.sound.play('select');
+  }
+
+  /* ------------------------------------------------------------- auto rival */
+
+  function maybeAutoPlay() {
+    if (!state || !state.autoRival || session.seat !== 'a') return;
+    if (state.zone !== 'battle' && state.zone !== 'over' && state.zone !== 'lobby') return;
+    if (busy) return;
+
+    if (state.zone === 'lobby') {
+      const L = state.loadout || {};
+      if (L.b && !L.b.locked && !autoTimer) autoTimer = setTimeout(autoLockRival, 1200);
+      return;
+    }
+
+    if (state.zone === 'over') {
+      if (state.rematch && state.rematch.a && !state.rematch.b && !autoTimer) {
+        autoTimer = setTimeout(autoRematch, 1500);
+      }
+      return;
+    }
+
+    const cap = state.cap || {};
+    if (cap.active && cap.accused === 'b' && cap.stage === 'answer') {
+      if (!autoTimer) autoTimer = setTimeout(autoAnswerCap, 2400);
+      return;
+    }
+    if (state.duel && state.duel.active) {
+      const results = state.duel.results || {};
+      if (results.b == null && !autoTimer) autoTimer = setTimeout(autoDuel, 2200);
+      return;
+    }
+    if (!state.focus || !state.focus.b) {
+      if (!autoTimer) autoTimer = setTimeout(autoPick, 1400);
+    }
+  }
+
+  /** Solo demo: after a rematch the fake rival rebuilds its loadout by itself. */
+  async function autoLockRival() {
+    autoTimer = null;
+    if (!state || state.zone !== 'lobby' || !state.autoRival) return;
+    busy = true;
+    try {
+      await publish((m) => {
+        if (m.zone !== 'lobby' || !m.loadout || !m.loadout.b) return;
+        const human = m.loadout.a || {};
+        if (human.type && m.loadout.b.type !== human.type) {
+          // the fake rival follows whatever habit the human picked
+          m.loadout.b.type = human.type;
+          m.loadout.b.moves = randomLoadout(human.type);
+          if (m.b) m.b.type = human.type;
+        }
+        m.loadout.b.locked = true;
+        m.loadout.b.approved = true;
+        m.loadout.b.gen = m.loadoutGen || 0;
+        if (readyToFight(m)) startBattle(m);
+      });
+    } catch (err) {
+      /* the next poll retries */
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function autoAnswerCap() {
+    autoTimer = null;
+    if (!state || !state.cap || !state.cap.active || state.cap.accused !== 'b') return;
+    const showsProof = Math.random() < 0.6;
+    busy = true;
+    try {
+      await publish((m) => {
+        if (!m.cap || !m.cap.active) return;
+        if (showsProof) {
+          m.cap.stage = 'judge';
+          m.cap.proof = 'data:image/svg+xml;base64,' + btoa(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="144">' +
+            '<rect width="160" height="144" fill="#9bbc0f"/>' +
+            '<rect x="8" y="8" width="144" height="128" fill="#8bac0f"/>' +
+            '<text x="80" y="70" font-family="monospace" font-size="11" text-anchor="middle" fill="#0f380f">RIVAL PROOF</text>' +
+            '<text x="80" y="88" font-family="monospace" font-size="9" text-anchor="middle" fill="#0f380f">HABIT TRACKER</text>' +
+            '</svg>'
+          );
+          const rival = m.cap.accused;
+          m.proof = { src: m.cap.proof, pose: 'HABIT TRACKER', by: rival, at: Date.now() };
+          pushLog(m, `RIVAL SENT A PHOTO. YOU DECIDE IF IT COUNTS.`, 'is-system');
+        } else {
+          settleCap(m, 'guilty');
+        }
+      });
+      HF.sound.play(showsProof ? 'select' : 'super');
+    } finally {
+      busy = false;
+      maybeAutoPlay();
+    }
+  }
+
+  async function autoDuel() {
+    autoTimer = null;
+    if (!state || !state.duel || !state.duel.active) return;
+    busy = true;
+    try {
+      await publish((m) => {
+        if (!m.duel || !m.duel.active) return;
+        if (!m.duel.results) m.duel.results = {};
+        m.duel.results.b = 180 + Math.floor(Math.random() * 320);
+      });
+      await resolveDuel();
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function autoRematch() {
+    autoTimer = null;
+    if (!state || state.zone !== 'over' || !state.rematch || state.rematch.b) return;
+    busy = true;
+    try {
+      await publish((m) => {
+        if (m.zone !== 'over') return;
+        m.rematch = m.rematch || { a: false, b: false };
+        m.rematch.b = true;
+        if (m.rematch.a) openRematchLobby(m);
+      });
+      HF.ui.reviveSprites();
+      session.recordedKey = null;
+    } finally {
+      busy = false;
+      maybeAutoPlay();
+    }
+  }
+
+  async function autoPick() {
+    autoTimer = null;
+    if (busy || !state || state.zone !== 'battle' || !state.autoRival) return;
+    if (state.cap && state.cap.active) return;
+    if (!state.focus || state.focus.b) return;
+
+    const foe = state.b;
+    if (!foe) return;
+    const ids = (foe.moves && foe.moves.length) ? foe.moves : defaultMoves(foe.type);
+    // The solo rival trains in short bursts, so its sessions actually finish
+    // while you are watching the demo.
+    const usable = ids
+      .filter((id) => {
+        const move = moveById(id);
+        const pp = foe.pp[id] == null ? (move ? move.pp : 0) : foe.pp[id];
+        return move && pp > 0;
+      })
+      .map((id) => moveById(id))
+      .sort((x, y) => x.mins - y.mins);
+    const move = usable[0];
+    if (!move) return;
+
+    busy = true;
+    try {
+      await publish((m) => {
+        if (m.zone !== 'battle') return;
+        if (m.focus.b) return;
+        startSession(m, 'b', move.id);
+      });
+      HF.sound.play('select');
+    } catch (err) {
+      HF.ui.toast('AUTO-RIVAL STALLED', true);
+    } finally {
+      busy = false;
+      if (state && state.zone === 'battle') setTimeout(() => maybeAutoPlay(), 400);
+    }
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 7. Wiring                                                              */
+  /* ---------------------------------------------------------------------- */
+
+  function bind() {
+    $('trainer-name').addEventListener('input', (event) => {
+      const raw = (event.target.value || 'TRAINER').toUpperCase().slice(0, 10);
+      session.name = raw || 'TRAINER';
+      if (session.account) {
+        session.account.name = session.name;
+        saveAccount();
+        renderAccountLine();
+      }
+    });
+
+    $$('#type-pick .type-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        session.type = btn.dataset.type;
+        session.pick.type = btn.dataset.type;
+        session.pick.moves = [];
+        $$('#type-pick .type-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+        HF.sound.play('select');
+        if (state && state.zone === 'lobby') {
+          buildMovePicker();
+          renderLoadout(state);
+        }
+      });
+    });
+
+    $$('#loadout-types .type-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (state && state.zone !== 'lobby') return;
+        session.pick.type = btn.dataset.type;
+        session.pick.moves = [];
+        HF.sound.play('select');
+        buildMovePicker();
+        if (state) renderLoadout(state);
+      });
+    });
+
+    $('ld-moves').addEventListener('click', (event) => {
+      const btn = event.target.closest('.mv-pick');
+      if (btn) pickMoveForLoadout(btn.dataset.mv);
+    });
+
+    $('btn-lock').addEventListener('click', lockLoadout);
+    $('btn-approve').addEventListener('click', approveLoadout);
+    $('btn-reject').addEventListener('click', rejectLoadout);
+    $('btn-match-type').addEventListener('click', matchRivalType);
+
+    $('btn-create').addEventListener('click', createMatch);
+    $('btn-howto').addEventListener('click', () => {
+      HF.sound.play('select');
+      go('howto');
+    });
+    $('btn-howto-back').addEventListener('click', () => {
+      HF.sound.play('select');
+      go('title');
+    });
+    $('btn-history').addEventListener('click', () => {
+      HF.sound.play('select');
+      renderHistory();
+      go('history');
+    });
+    $('btn-history-back').addEventListener('click', () => {
+      HF.sound.play('select');
+      go('title');
+    });
+
+    $('btn-join').addEventListener('click', joinMatch);
+    $('join-code').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') joinMatch();
+    });
+
+    $('btn-solo').addEventListener('click', startSolo);
+    $('btn-leave').addEventListener('click', quitToTitle);
+    $('btn-leave-match').addEventListener('click', leaveMatch);
+    $('btn-copy').addEventListener('click', async () => {
+      if (!state) return;
+      const link = HF.net.inviteLink(state.code);
+      try {
+        await navigator.clipboard.writeText(link);
+        HF.ui.toast('INVITE COPIED');
+      } catch (err) {
+        HF.ui.toast(link);
+      }
+    });
+
+    $('moves').addEventListener('click', (event) => {
+      const btn = event.target.closest('.move-btn');
+      if (btn) pickMove(btn.dataset.move);
+    });
+
+    $('btn-proof').addEventListener('click', openCamera);
+    $('btn-bluff').addEventListener('click', callCap);
+
+    $$('#ante-pick .type-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        session.ante = Number(btn.dataset.ante) || 3;
+        $$('#ante-pick .type-btn').forEach((b) => b.classList.toggle('is-active', b === btn));
+        HF.sound.play('select');
+      });
+    });
+
+    $('btn-dev').addEventListener('click', () => {
+      const panel = $('dev-panel');
+      const open = panel.hidden;
+      panel.hidden = !open;
+      $('btn-dev').setAttribute('aria-expanded', open ? 'true' : 'false');
+      HF.sound.play('select');
+    });
+    $$('[data-tok]').forEach((btn) => {
+      btn.addEventListener('click', () => tokenLab(btn.dataset.tok));
+    });
+    $('btn-duel').addEventListener('click', startDuel);
+    $('btn-rematch').addEventListener('click', rematch);
+    $('btn-focus-tap').addEventListener('click', tapFocus);
+    $('btn-receipt').addEventListener('click', () => {
+      if (state) HF.receipt.show(state, session.seat);
+    });
+
+    $('btn-mute').addEventListener('click', (event) => {
+      const muted = HF.sound.toggle();
+      event.currentTarget.setAttribute('aria-pressed', muted ? 'true' : 'false');
+      event.currentTarget.textContent = muted ? 'OFF' : 'SFX';
+    });
+    $('btn-mute').setAttribute('aria-pressed', HF.sound.isMuted() ? 'true' : 'false');
+    $('btn-mute').textContent = HF.sound.isMuted() ? 'OFF' : 'SFX';
+
+    $$('[data-close]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.close;
+        if (id === 'camera') {
+          HF.camera.close();
+          reopenCapIfOpen();
+        } else if (id === 'cap') {
+          if (state && state.cap && state.cap.active && state.cap.by === session.seat) {
+            answerCap('cancel');
+          } else if (state && state.cap && state.cap.active) {
+            renderCap(state);
+            HF.ui.overlay('cap', true);
+          } else {
+            HF.ui.overlay('cap', false);
+          }
+        } else HF.ui.overlay(id, false);
+      });
+    });
+
+    $('btn-cam-close').addEventListener('click', () => {
+      HF.camera.close();
+      reopenCapIfOpen();
+    });
+    $('btn-shutter').addEventListener('click', () => HF.camera.snap());
+    $('btn-cam-send').addEventListener('click', () => HF.camera.send());
+
+    $('btn-cap-proof').addEventListener('click', () => {
+      HF.ui.overlay('cap', false);
+      openCamera();
+    });
+    $('btn-cap-hit').addEventListener('click', () => answerCap('concede'));
+    $('btn-cap-accept').addEventListener('click', () => answerCap('legit'));
+    $('btn-cap-reject').addEventListener('click', () => answerCap('reject'));
+    $('btn-cap-cancel').addEventListener('click', () => answerCap('cancel'));
+
+    $('btn-receipt-save').addEventListener('click', () => HF.receipt.save());
+    $('btn-receipt-close').addEventListener('click', () => HF.ui.overlay('receipt', false));
+
+    // Unlock audio on the first gesture (browsers block autoplay).
+    const unlock = () => { HF.sound.play('select'); document.removeEventListener('pointerdown', unlock); };
+    document.addEventListener('pointerdown', unlock);
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 8. Boot                                                                */
+  /* ---------------------------------------------------------------------- */
+
+  function init() {
+    HF.net.init((window.HF_CONFIG && window.HF_CONFIG.firebaseUrl) || '');
+    $('net-hint').textContent = HF.net.hint();
+
+    session.account = loadAccount();
+    session.name = session.account.name;
+    session.type = 'STUDY';
+    session.pick = { type: 'STUDY', moves: [] };
+    $('trainer-name').value = session.name === 'TRAINER' ? '' : session.name;
+
+    buildMovePicker();
+    bind();
+    renderAccountLine();
+    renderHistory();
+    setInterval(tick, 1000);
+
+    const params = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+    const roomCode = params.get('room');
+
+    if (roomCode) {
+      $('join-code').value = roomCode.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+      $('trainer-name').focus();
+      go('title');
+      return;
+    }
+
+    // An accidental refresh mid-demo should not cost you your seat.
+    const last = localStorage.getItem('hf:last');
+    const lastSeat = last ? sessionStorage.getItem('hf:seat:' + last) : null;
+    if (last && lastSeat) {
+      HF.net.read(last)
+        .then((match) => {
+          // Rooms from before loadouts existed — or from the four-type build —
+          // cannot be played on this build.
+          const savedLoadouts = match && match.loadout;
+          const staleType = !!(savedLoadouts && ['a', 'b'].some((side) => (
+            savedLoadouts[side] && TYPES.indexOf(savedLoadouts[side].type) === -1
+          )));
+          // A loadout naming a move that no longer exists (all-nighter, leg day)
+          // would render short and unplayable, so drop the room instead.
+          const staleMove = !!(savedLoadouts && ['a', 'b'].some((side) => (
+            savedLoadouts[side] && (savedLoadouts[side].moves || []).some((id) => !moveById(id))
+          )));
+          if (!match || !match[lastSeat] || !match.loadout || staleType || staleMove) {
+            if (match) {
+              try { localStorage.removeItem('hf:last'); } catch (err) { /* private mode */ }
+              sessionStorage.removeItem('hf:seat:' + last);
+            }
+            go('title');
+            return;
+          }
+          session.code = last;
+          session.seat = lastSeat;
+          const load = match.loadout && match.loadout[lastSeat];
+          if (load) session.pick = { type: load.type, moves: load.moves.slice() };
+          HF.net.start(last, applyState);
+          applyState(match);
+        })
+        .catch(() => go('title'));
+      return;
+    }
+
+    go('title');
+  }
+
+  /* Exposed for the console and the rule tests: no behaviour change. */
+  HF.dev = {
+    newMatch, fighter, applyMove, startSession, resolveSession, checkFaint,
+    damageFor, settleCap, openBattle, transfer, randomLoadout, defaultMoves,
+    verdict, timerMs, clock, handleTick: tick, DEMO_MS_PER_MIN,
+    moves: MOVES, MAX_HP, LOADOUT_SIZE, LONG_SESSION,
+  };
+
+  if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', init);
+})(window.HF);

@@ -26,17 +26,34 @@ jobs:
       - uses: actions/checkout@v4
 
       # The game is authored in the Freebuff project and served from there.
-      # This pulls the built files so the repo always matches what is live.
-      - name: Pull the game from the live deploy
+      # This pulls the built files so the repo always matches what is live, and
+      # falls back to the checked-in public/ files when the live site is paused
+      # (Freebuff hosting has a daily request allowance).
+      - name: Mirror the game into docs/
         run: |
           set -euo pipefail
+          pull_live() {
+            curl -fsSL "$LIVE/" -o docs/index.html
+            curl -fsSL "$LIVE/config.js" -o docs/config.js
+            for f in $STATIC_FILES; do
+              curl -fsSL "$LIVE/static/$f" -o "docs/static/$f"
+            done
+          }
+          from_repo() {
+            cp public/index.html docs/index.html
+            cp public/config.js docs/config.js
+            for f in $STATIC_FILES; do
+              cp "public/static/$f" "docs/static/$f"
+            done
+          }
           rm -rf docs
           mkdir -p docs/static
-          curl -fsSL "$LIVE/" -o docs/index.html
-          curl -fsSL "$LIVE/config.js" -o docs/config.js
-          for f in $STATIC_FILES; do
-            curl -fsSL "$LIVE/static/$f" -o "docs/static/$f"
-          done
+          if ! pull_live; then
+            echo "::warning::live deploy unavailable, mirroring the checked-in files instead"
+            rm -rf docs
+            mkdir -p docs/static
+            from_repo
+          fi
           touch docs/.nojekyll
           find docs -type f | sort
 

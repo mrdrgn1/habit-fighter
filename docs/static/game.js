@@ -30,16 +30,14 @@ window.HF = window.HF || {};
   const ACCOUNT_KEY = 'hf:account';
   const ACCOUNT_START = 50;
 
-  /* Demo clock: ?speed=60 turns one game minute into one real second, so a
-     2-hour session can be walked through on stage. Default is real time. */
-  const SPEED = (() => {
-    try {
-      const raw = Number(new URLSearchParams(location.search).get('speed'));
-      if (Number.isFinite(raw) && raw > 0) return Math.min(3600, raw);
-    } catch (err) { /* no URLSearchParams: real time */ }
-    return 1;
-  })();
-  const timerMs = (mins) => Math.max(900, Math.round((mins || 0) * 60000 / SPEED));
+  /* Demo clock, flipped from the DEV panel and shared through the room: a
+     2-hour session runs for 5 real seconds, a 4-hour one for 10. Real time is
+     the default, so nothing changes for an actual match. */
+  const DEMO_MS_PER_MIN = 1000 / 24;
+  const timerMs = (match, mins) => Math.max(
+    800,
+    Math.round((mins || 0) * ((match && match.demo) ? DEMO_MS_PER_MIN : 60000))
+  );
 
   /** 1:02:03 / 42:10 — the session clocks on screen. */
   function clock(ms) {
@@ -290,6 +288,7 @@ window.HF = window.HF || {};
       zone: 'lobby',
       winner: null,
       autoRival: false,
+      demo: false,
       log: [],
       proof: null,
       ante: 3,
@@ -607,7 +606,7 @@ window.HF = window.HF || {};
       moveId,
       mins: move.mins,
       startAt: now,
-      endAt: now + timerMs(move.mins),
+      endAt: now + timerMs(match, move.mins),
     };
     pushLog(match, `${f.name} starts ${move.name} — ${durLabel(move.mins)} on the clock.`, 'is-system');
     return true;
@@ -631,16 +630,31 @@ window.HF = window.HF || {};
   /* 4. Sync helpers                                                        */
   /* ---------------------------------------------------------------------- */
 
-  async function publish(fn) {
-    const next = await HF.net.mutate(session.code, fn);
-    applyState(next, { local: true });
-    return next;
+  /*
+   * Every write goes through one queue. A room write is read-modify-write of
+   * the whole match, so two overlapping writes (say the session payout and the
+   * auto rival picking) would each save a snapshot missing the other's change —
+   * and a finished session could vanish. Queueing keeps this tab's writes
+   * ordered; two phones still race, which the README calls out.
+   */
+  let writeChain = Promise.resolve();
+
+  function publish(fn) {
+    const run = async () => {
+      const next = await HF.net.mutate(session.code, fn);
+      applyState(next, { local: true });
+      return next;
+    };
+    const queued = writeChain.then(run, run);
+    writeChain = queued.then(() => {}, () => {});
+    return queued;
   }
 
   function ensureShape(match) {
     if (!match) return match;
     if (!match.focus) match.focus = freshFocus();
     if (!match.loadout) match.loadout = { a: null, b: null };
+    if (match.demo == null) match.demo = false;
     return match;
   }
 
@@ -652,7 +666,9 @@ window.HF = window.HF || {};
   async function tick() {
     if (!state || state.zone !== 'battle') return;
     updateClocks();
-    if (busy || ticking) return;
+    // busy is deliberately not checked: a payout is queued behind whatever
+    // write is in flight, so a churning auto rival can never starve the clock.
+    if (ticking) return;
 
     const mine = state.focus && state.focus[session.seat];
     const foeSide = other(session.seat);
@@ -916,7 +932,7 @@ window.HF = window.HF || {};
     const me = match[session.seat] || {};
     const foe = match[other(session.seat)] || {};
 
-    $('device-room').textContent = 'ROOM ' + match.code;
+    $('device-room').textContent = 'ROOM ' + match.code + (match.demo ? ' · DEMO' : '');
     $('foe-name').textContent = foe.name || 'RIVAL';
     $('foe-name').nextElementSibling.textContent = foe.type || '—';
     $('me-name').textContent = me.name || 'YOU';
@@ -1895,6 +1911,17 @@ window.HF = window.HF || {};
           // Dev only: drop the clock to zero so the payout can be shown now.
           if (m.focus[session.seat]) m.focus[session.seat].endAt = Date.now() - 1;
           break;
+        case 'demo':
+          // Demo clock lives on the room, so one tap flips both phones.
+          m.demo = !m.demo;
+          ['a', 'b'].forEach((side) => {
+            const active = m.focus && m.focus[side];
+            if (active) active.endAt = active.startAt + timerMs(m, active.mins);
+          });
+          pushLog(m, m.demo
+            ? 'DEV: DEMO CLOCK ON — 2H SESSIONS TAKE 5 SECONDS.'
+            : 'DEV: REAL CLOCK BACK ON.', 'is-system');
+          break;
         case 'ko':
           if (m[foe]) m[foe].hp = 0;
           checkFaint(m);
@@ -2288,7 +2315,12 @@ window.HF = window.HF || {};
           const staleType = !!(savedLoadouts && ['a', 'b'].some((side) => (
             savedLoadouts[side] && TYPES.indexOf(savedLoadouts[side].type) === -1
           )));
-          if (!match || !match[lastSeat] || !match.loadout || staleType) {
+          // A loadout naming a move that no longer exists (all-nighter, leg day)
+          // would render short and unplayable, so drop the room instead.
+          const staleMove = !!(savedLoadouts && ['a', 'b'].some((side) => (
+            savedLoadouts[side] && (savedLoadouts[side].moves || []).some((id) => !moveById(id))
+          )));
+          if (!match || !match[lastSeat] || !match.loadout || staleType || staleMove) {
             if (match) {
               try { localStorage.removeItem('hf:last'); } catch (err) { /* private mode */ }
               sessionStorage.removeItem('hf:seat:' + last);
@@ -2314,8 +2346,8 @@ window.HF = window.HF || {};
   HF.dev = {
     newMatch, fighter, applyMove, startSession, resolveSession, checkFaint,
     damageFor, settleCap, openBattle, transfer, randomLoadout, defaultMoves,
-    verdict, timerMs, clock, handleTick: tick,
-    moves: MOVES, MAX_HP, LOADOUT_SIZE, LONG_SESSION, SPEED,
+    verdict, timerMs, clock, handleTick: tick, DEMO_MS_PER_MIN,
+    moves: MOVES, MAX_HP, LOADOUT_SIZE, LONG_SESSION,
   };
 
   if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', init);

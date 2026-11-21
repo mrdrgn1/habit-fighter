@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a120d">
+  <title>Habit Fighter · Game Boy Edition</title>
+
+  <!-- Retro look: Press Start 2P + NES.css (both plain <link> tags) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <link href="https://unpkg.com/nes.css@2.3.0/css/nes.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+  <div class="scanlines" aria-hidden="true"></div>
+
+  <div class="stage">
+
+    <!-- ==================================================================
+         1. TITLE / TRAINER SETUP
+         ================================================================== -->
+    <section class="layer is-active" id="layer-title">
+      <p class="tag">TRACK 02 · RETRO REMIX · <span class="blink">KCL 2026</span></p>
+
+      <h1 class="logo">
+        <span>HABIT</span>
+        <span class="logo-accent">FIGHTER</span>
+      </h1>
+      <p class="logo-sub">GAME BOY EDITION</p>
+      <p class="acct-line" id="acct-line">DEVICE TRAINER · 50 🪙</p>
+
+      <div class="panel">
+        <label class="field">
+          <span class="field-label">TRAINER NAME</span>
+          <input class="nes-input" id="trainer-name" maxlength="10" placeholder="BEA" autocomplete="off" spellcheck="false">
+        </label>
+
+        <div class="field">
+          <span class="field-label">YOUR TYPE</span>
+          <div class="types" id="type-pick" role="group" aria-label="Pick your type">
+            <button class="type-btn is-active" type="button" data-type="STUDY">STUDY</button>
+            <button class="type-btn" type="button" data-type="GYM">GYM</button>
+          </div>
+          <div class="typechart-panel">
+            <p class="typechart-title">SAME HABIT OR NO FIGHT</p>
+            <ul class="typechart-list">
+              <li><b>STUDY</b><span class="arrow">=</span><b>STUDY</b></li>
+              <li><b>GYM</b><span class="arrow">=</span><b>GYM</b></li>
+            </ul>
+            <p class="hint">Both trainers must pick the same type before the battle can start. Every move is a real session of work, with its length, damage and uses printed on the button.</p>
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="field-label">ANTE · BOTH SIDES STAKE IT</span>
+          <div class="types" id="ante-pick" role="group" aria-label="Pick the ante">
+            <button class="type-btn" type="button" data-ante="1">1 🪙</button>
+            <button class="type-btn is-active" type="button" data-ante="3">3 🪙</button>
+            <button class="type-btn" type="button" data-ante="5">5 🪙</button>
+          </div>
+          <p class="hint" id="ante-hint">Wallet: 50 🪙 saved on this device.</p>
+        </div>
+
+        <button class="btn btn-primary btn-block" id="btn-create" type="button">▶ NEW MATCH</button>
+        <button class="btn btn-block" id="btn-howto" type="button">? HOW TO PLAY</button>
+        <button class="btn btn-block" id="btn-history" type="button">▤ BATTLE HISTORY</button>
+
+        <div class="join">
+          <input class="nes-input" id="join-code" maxlength="6" placeholder="CODE" autocomplete="off" spellcheck="false" aria-label="Room code">
+          <button class="btn" id="btn-join" type="button">JOIN</button>
+        </div>
+
+        <p class="hint" id="net-hint">…</p>
+      </div>
+
+      <p class="credit">4 SHADES OF DMG · 160×144 · SQUARE WAVES ONLY</p>
+    </section>
+
+    <!-- ==================================================================
+         2. HOW TO PLAY — the manual page
+         ================================================================== -->
+    <section class="layer" id="layer-howto">
+      <p class="tag">MANUAL · READ THIS ONCE</p>
+      <h2 class="layer-title">HOW TO PLAY</h2>
+
+      <div class="panel manual">
+        <div class="manual-step">
+          <span class="manual-num">1</span>
+          <div class="manual-body">
+            <h3>ONE MATCH, TWO PHONES</h3>
+            <p>One trainer taps NEW MATCH. The other scans the QR on the lobby screen, or types the 5-letter code. Both phones then show the same battle.</p>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <span class="manual-num">2</span>
+          <div class="manual-body">
+            <h3>SAME HABIT, THEN LOADOUTS</h3>
+            <p>Only two types exist: <b>STUDY</b> and <b>GYM</b>. Both trainers must pick the <b>same one</b> — a STUDY trainer and a GYM trainer never start a fight. Then take exactly <b>six moves</b> from that type's list (nine to choose from in STUDY, seven in GYM), lock in, and your rival approves it. If the types clash, one tap on <b>SWITCH TO…</b> joins their habit.</p>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <span class="manual-num">3</span>
+          <div class="manual-body">
+            <h3>EVERY MOVE IS A TIMER</h3>
+            <p>No turns and no rounds. Pick a move and you are <b>locked in</b> for its real length — 15 minutes, 2 hours, the whole night. Every move button stays dead until the clock hits zero, then the hit lands and you can pick again. Both phones run their own clock.</p>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <span class="manual-num">4</span>
+          <div class="manual-body">
+            <h3>WHAT EACH MOVE DOES</h3>
+            <p>Every button prints its own numbers. STUDY: a 10-minute break heals 10 (4 uses), 20 flashcards 15 damage in 30 min, a finished quiz 10 damage + 5 heal, a lecture rewatch heals 20 (2 uses), a past paper / notes / deep learning hour 30 damage, committing code 20 damage + 10 heal, and 2-hour coursework 60 damage (3 uses). GYM: stretching and 20 push-ups 5 damage in 5 min, a set 10 damage in 10 min, a rest heals 5, treadmill 5K or a sparring session 30 damage in 30 min, and one protein shake heals 10 once a match.</p>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <span class="manual-num">5</span>
+          <div class="manual-body">
+            <h3>STATUS AND PP</h3>
+            <p>PARALYSED and SNOOZE can eat your session, BURNOUT bites for 5 HP after each one, DOOMSCROLL for 4. Some moves cure you. Run every move dry and you get a second wind.</p>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <span class="manual-num">6</span>
+          <div class="manual-body">
+            <h3>CALLING CAP · 3 PER MATCH</h3>
+            <p>Think your rival faked a habit? Tap <b>CALL CAP</b>. They either <b>show a photo</b> or <b>take the hit</b>: -25 HP and a FRAUD flag, plus 2 🪙 to you.</p>
+            <p>Nothing verifies a photo. You judge it: accept it and you pay 1 🪙, or reject it and the call stands.</p>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <span class="manual-num">7</span>
+          <div class="manual-body">
+            <h3>CAM PROOF ONLY ANSWERS A CAP</h3>
+            <p><b>SHOW PROOF</b> is the only thing that opens the Game Boy camera, and only while someone is calling cap on you. No photo, no cap, no camera — that is the whole verification system.</p>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <span class="manual-num">8</span>
+          <div class="manual-body">
+            <h3>FOCUS DUEL · ONCE PER MATCH</h3>
+            <p>Both phones light up on their own. Wait for <b>TAP NOW!</b> then hit it. The slower trainer takes 12 HP and falls asleep.</p>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <span class="manual-num">9</span>
+          <div class="manual-body">
+            <h3>THE WALLET · 50 🪙 ON THIS DEVICE</h3>
+            <p>You start with 50 🪙 and the balance lives on your phone, so it is still there next time. Both sides ante 1, 3 or 5 into the Match Pot; a <b>LOCKED IN</b> combo steals 1 🪙, a busted cap costs the liar 2, a wrong call costs the accuser 1.</p>
+            <p>Knock them out and you sweep the pot. Hit 0 and you are <b>BANKRUPT</b>: no cap calls left. Every battle is written to BATTLE HISTORY on the title screen. Not real money, just shame.</p>
+            <p>Walking out mid-match is a forfeit: tap <b>LEAVE</b> twice and you lose the ante sitting in the pot <b>and</b> pay 2 🪙 on top. Your rival takes the whole pot and the match — leaving is always worse than losing.</p>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <span class="manual-num">10</span>
+          <div class="manual-body">
+            <h3>REMATCH AND THE PRINTER</h3>
+            <p>REMATCH only fires when <b>both</b> trainers tap it, and it drops you back to the loadout screen: change your type and picks if you want, then get approved again. The printer turns the match into a Game Boy receipt PNG, token ledger included.</p>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn btn-block" id="btn-howto-back" type="button">◀ BACK</button>
+    </section>
+
+    <!-- ==================================================================
+         3. BATTLE HISTORY — saved on this device
+         ================================================================== -->
+    <section class="layer" id="layer-history">
+      <p class="tag">SAVED ON THIS DEVICE</p>
+      <h2 class="layer-title">BATTLE HISTORY</h2>
+
+      <div class="panel hist-panel">
+        <p class="hist-summary" id="hist-summary">…</p>
+        <div class="hist-list" id="hist-list"></div>
+      </div>
+
+      <button class="btn btn-block" id="btn-history-back" type="button">◀ BACK</button>
+    </section>
+
+    <!-- ==================================================================
+         4. LOBBY
+         ================================================================== -->
+    <section class="layer" id="layer-lobby">
+      <p class="tag">MATCH LOBBY</p>
+      <h2 class="layer-title">ROOM CODE</h2>
+
+      <div class="codebox"><span id="lobby-code">-----</span></div>
+      <p class="hint">Send this code — or let your rival scan it. Both screens share one HP bar.</p>
+
+      <div class="qr-block">
+        <div class="qr-code" id="invite-qr"></div>
+        <p class="qr-label">SCAN TO JOIN<br><span>RIVAL — POINT YOUR CAMERA HERE</span></p>
+      </div>
+
+      <div class="lobby-slots">
+        <div class="slot"><span class="slot-dot" id="slot-a-dot"></span><span id="slot-a-name">—</span></div>
+        <div class="slot"><span class="slot-dot" id="slot-b-dot"></span><span id="slot-b-name">waiting…</span></div>
+      </div>
+
+      <div class="loadout" id="loadout">
+        <p class="ld-title">YOUR LOADOUT</p>
+        <div class="types" id="loadout-types" role="group" aria-label="Loadout type">
+          <button class="type-btn is-active" type="button" data-type="STUDY">STUDY</button>
+          <button class="type-btn" type="button" data-type="GYM">GYM</button>
+        </div>
+        <p class="ld-count" id="ld-count">PICK 6 MOVES · 0/6</p>
+        <div class="ld-moves" id="ld-moves"><!-- eight moves per type, injected by game.js --></div>
+        <button class="btn btn-primary btn-block" id="btn-lock" type="button">🔒 LOCK LOADOUT</button>
+        <p class="hint" id="ld-status">SIX MOVES. NO MORE, NO LESS.</p>
+
+        <div class="ld-review" id="ld-review" hidden>
+          <p class="ld-title">RIVAL LOADOUT · APPROVE IT</p>
+          <p class="ld-rival" id="ld-rival">—</p>
+          <div class="lobby-actions">
+            <button class="btn btn-good" id="btn-approve" type="button">APPROVE LOADOUT</button>
+            <button class="btn btn-bad" id="btn-reject" type="button">REJECT</button>
+            <button class="btn btn-good" id="btn-match-type" type="button" hidden>↺ SWITCH TO GYM</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="lobby-actions">
+        <button class="btn" id="btn-copy" type="button">COPY INVITE</button>
+        <button class="btn" id="btn-solo" type="button">SOLO DEMO</button>
+        <button class="btn btn-quiet" id="btn-leave" type="button">QUIT</button>
+      </div>
+
+      <p class="hint" id="lobby-hint"></p>
+    </section>
+
+    <!-- ==================================================================
+         5. BATTLE — the Game Boy
+         ================================================================== -->
+    <section class="layer" id="layer-battle">
+      <div class="device">
+        <div class="device-top">
+          <span class="device-brand">HABIT FIGHTER</span>
+          <span class="device-room" id="device-room">ROOM —</span>
+          <span class="turnflag" id="turnflag">ROUND 1 · PICK</span>
+        </div>
+
+        <div class="lcd" id="lcd">
+          <div class="battle-row">
+            <div class="fighter-card">
+              <div class="fname-row">
+                <span class="fname" id="foe-name">RIVAL</span>
+                <span class="lv">Lv.21</span>
+              </div>
+              <div class="hpbar"><div class="hpbar-fill" id="foe-hp"></div></div>
+              <div class="hpnum" id="foe-hpnum">120/120</div>
+              <div class="status" id="foe-status"></div>
+            </div>
+            <div class="sprite-slot">
+              <svg class="sprite" id="foe-sprite" viewBox="0 0 16 16" shape-rendering="crispEdges" aria-hidden="true">
+                <g fill="#0f380f">
+                  <rect x="4" y="1" width="2" height="2"/><rect x="10" y="1" width="2" height="2"/>
+                  <rect x="3" y="2" width="10" height="12"/><rect x="2" y="6" width="12" height="5"/>
+                  <rect x="4" y="14" width="3" height="2"/><rect x="9" y="14" width="3" height="2"/>
+                </g>
+                <g fill="#8bac0f">
+                  <rect x="4" y="3" width="8" height="10"/><rect x="3" y="7" width="10" height="3"/>
+                </g>
+                <g fill="#0f380f">
+                  <rect x="4" y="5" width="3" height="2"/><rect x="9" y="5" width="3" height="2"/>
+                  <rect x="6" y="9" width="4" height="1"/><rect x="7" y="10" width="2" height="1"/>
+                </g>
+                <g fill="#9bbc0f">
+                  <rect x="4" y="4" width="1" height="1"/><rect x="9" y="4" width="1" height="1"/>
+                </g>
+              </svg>
+            </div>
+          </div>
+
+          <div class="tokenbar" id="tokenbar">
+            <div class="tok-cell">
+              <span class="tok-who" id="tok-a-name">P1</span>
+              <span class="tok-amount" id="tok-a">50</span>
+              <span class="tok-unit">🪙</span>
+              <span class="bankrupt" id="bankrupt-a" hidden>BANKRUPT</span>
+            </div>
+            <div class="tok-cell is-pot">
+              <span class="tok-who">MATCH POT</span>
+              <span class="tok-amount" id="tok-pot">6</span>
+              <span class="tok-unit">🪙</span>
+            </div>
+            <div class="tok-cell is-right">
+              <span class="tok-who" id="tok-b-name">P2</span>
+              <span class="tok-amount" id="tok-b">50</span>
+              <span class="tok-unit">🪙</span>
+              <span class="bankrupt" id="bankrupt-b" hidden>BANKRUPT</span>
+            </div>
+          </div>
+
+          <div class="focusbar" id="focusbar">
+            <div class="focus-cell">
+              <span class="focus-who" id="focus-me-who">YOU</span>
+              <span class="focus-what" id="focus-me-what">NO SESSION</span>
+              <span class="focus-clock" id="focus-me-clock">READY</span>
+            </div>
+            <div class="focus-cell is-right">
+              <span class="focus-who" id="focus-foe-who">RIVAL</span>
+              <span class="focus-what" id="focus-foe-what">NO SESSION</span>
+              <span class="focus-clock" id="focus-foe-clock">READY</span>
+            </div>
+          </div>
+
+          <div class="textbox" id="textbox" aria-live="polite">
+            <p class="line" id="line-1"></p>
+            <p class="line" id="line-2"></p>
+            <p class="line" id="line-3"></p>
+            <span class="caret" id="caret" aria-hidden="true">▼</span>
+          </div>
+
+          <div class="battle-row is-mine">
+            <div class="sprite-slot">
+              <svg class="sprite" id="me-sprite" viewBox="0 0 16 16" shape-rendering="crispEdges" aria-hidden="true">
+                <g fill="#0f380f">
+                  <rect x="5" y="1" width="6" height="5"/><rect x="4" y="6" width="8" height="7"/>
+                  <rect x="3" y="9" width="2" height="4"/><rect x="11" y="9" width="2" height="4"/>
+                  <rect x="4" y="13" width="3" height="2"/><rect x="9" y="13" width="3" height="2"/>
+                  <rect x="12" y="6" width="3" height="5"/>
+                </g>
+                <g fill="#8bac0f">
+                  <rect x="6" y="7" width="4" height="5"/><rect x="12" y="7" width="2" height="3"/>
+                </g>
+                <g fill="#0f380f">
+                  <rect x="6" y="3" width="1" height="1"/><rect x="9" y="3" width="1" height="1"/>
+                  <rect x="7" y="5" width="2" height="1"/>
+                </g>
+              </svg>
+            </div>
+            <div class="fighter-card">
+              <div class="fname-row">
+                <span class="fname" id="me-name">YOU</span>
+                <span class="lv" id="me-type">STUDY</span>
+              </div>
+              <div class="hpbar"><div class="hpbar-fill" id="me-hp"></div></div>
+              <div class="hpnum" id="me-hpnum">120/120</div>
+              <div class="status" id="me-status"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="moves" id="moves"><!-- six chosen moves injected by game.js --></div>
+        <p class="battle-hint" id="battle-hint">BOTH TRAINERS PICK — FIRST STRIKE ALTERNATES EACH ROUND</p>
+
+        <div class="utils">
+          <button class="btn btn-sm" id="btn-proof" type="button" disabled>CAM PROOF</button>
+          <button class="btn btn-sm" id="btn-bluff" type="button">CALL CAP · <span id="bluff-count">3</span></button>
+          <button class="btn btn-sm" id="btn-duel" type="button">FOCUS DUEL</button>
+          <button class="btn btn-sm" id="btn-receipt" type="button">PRINTER</button>
+          <button class="btn btn-sm" id="btn-leave-match" type="button">LEAVE · FORFEIT POT + 2 🪙</button>
+        </div>
+
+        <p class="typechain" id="typechain">STUDY SESSION · LONGER WORK = MORE DAMAGE</p>
+
+        <button class="btn btn-primary btn-block btn-focus" id="btn-focus-tap" type="button" hidden>WAIT…</button>
+        <button class="btn btn-block btn-rematch" id="btn-rematch" type="button" hidden>⟳ REMATCH</button>
+
+        <div class="device-bottom">
+          <span class="dpad" aria-hidden="true"></span>
+          <span class="brandline">DOT MATRIX WITH STEREO SOUND</span>
+          <button class="pill-btn" id="btn-mute" type="button" aria-pressed="false" aria-label="Mute sound">SFX</button>
+          <button class="pill-btn is-dev" id="btn-dev" type="button" aria-expanded="false" aria-label="Token test panel">DEV</button>
+        </div>
+      </div>
+
+      <div class="dev-panel" id="dev-panel" hidden>
+        <p class="dev-title">DEV · DEMO LAB <span>timers, tokens and instant payouts</span></p>
+        <div class="dev-grid">
+          <button class="btn btn-sm" type="button" data-tok="gain">+1 TOKENS</button>
+          <button class="btn btn-sm" type="button" data-tok="lose">-1 TOKENS</button>
+          <button class="btn btn-sm" type="button" data-tok="steal">LOCKED IN STEAL</button>
+          <button class="btn btn-sm" type="button" data-tok="cap-guilty">CAP: GUILTY</button>
+          <button class="btn btn-sm" type="button" data-tok="cap-legit">CAP: PROOF OK</button>
+          <button class="btn btn-sm" type="button" data-tok="sweep">SWEEP POT</button>
+          <button class="btn btn-sm" type="button" data-tok="bankrupt">GO BANKRUPT</button>
+          <button class="btn btn-sm" type="button" data-tok="reset">RESET TO 50</button>
+          <button class="btn btn-sm" type="button" data-tok="demo">DEMO CLOCK ON/OFF</button>
+          <button class="btn btn-sm" type="button" data-tok="finish">END MY TIMER</button>
+          <button class="btn btn-sm" type="button" data-tok="ko">KO RIVAL</button>
+        </div>
+      </div>
+
+      <p class="proofstrip" id="proofstrip" hidden>
+        <img id="proof-thumb" alt="Last proof photo">
+        <span id="proof-meta"></span>
+      </p>
+    </section>
+
+  </div>
+
+  <!-- ====================================================================
+       OVERLAYS
+       ==================================================================== -->
+
+  <!-- Camera -->
+  <div class="overlay" id="camera" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <span>GAME BOY CAMERA</span>
+        <button class="close" type="button" data-close="camera" aria-label="Close camera">×</button>
+      </div>
+      <p class="pose" id="cam-pose">POSE: PEACE SIGN</p>
+      <div class="cam-stage">
+        <video id="cam-video" playsinline muted autoplay hidden></video>
+        <canvas id="cam-canvas" width="160" height="144"></canvas>
+        <p class="cam-error" id="cam-error" hidden></p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="btn-shutter" type="button">SNAP</button>
+        <button class="btn btn-good" id="btn-cam-send" type="button" hidden>SEND PROOF</button>
+        <button class="btn btn-quiet" id="btn-cam-close" type="button">CANCEL</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Call cap: the accuser judges, nothing is verified automatically -->
+  <div class="overlay" id="cap" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <span id="cap-head">CALLED CAP</span>
+        <button class="close" type="button" data-close="cap" aria-label="Close">×</button>
+      </div>
+      <p class="jury-sub" id="cap-sub">Prove it or take the hit.</p>
+      <div class="jury-photo" id="cap-photo">
+        <img id="cap-img" alt="Proof of the habit">
+        <p class="jury-nophoto">NO PHOTO YET</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="btn-cap-proof" type="button" hidden>SHOW PROOF</button>
+        <button class="btn btn-bad" id="btn-cap-hit" type="button" hidden>TAKE THE HIT -25</button>
+        <button class="btn btn-good" id="btn-cap-accept" type="button" hidden>ACCEPT PROOF -1 🪙</button>
+        <button class="btn btn-bad" id="btn-cap-reject" type="button" hidden>REJECT &amp; PUNISH</button>
+        <button class="btn btn-quiet" id="btn-cap-cancel" type="button" hidden>DROP THE CALL</button>
+      </div>
+      <p class="hint" id="cap-hint"></p>
+    </div>
+  </div>
+
+  <!-- Receipt / printer -->
+  <div class="overlay" id="receipt" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <span>GAME BOY PRINTER</span>
+        <button class="close" type="button" data-close="receipt" aria-label="Close printer">×</button>
+      </div>
+      <div class="receipt-wrap"><div class="receipt-paper" id="receipt-paper"></div></div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="btn-receipt-save" type="button">SAVE PNG</button>
+        <button class="btn btn-quiet" id="btn-receipt-close" type="button">CLOSE</button>
+      </div>
+      <p class="hint" id="receipt-hint"></p>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="config.js"></script>
+  <script src="static/qrcode.js"></script>
+  <script src="static/qr.js"></script>
+  <script src="static/ui.js"></script>
+  <script src="static/firebase.js"></script>
+  <script src="static/camera.js"></script>
+  <script src="static/moves.js"></script>
+  <script src="static/receipt.js"></script>
+  <script src="static/game.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" defer></script>
+</body>
+</html>

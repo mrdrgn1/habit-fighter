@@ -3,10 +3,10 @@
 
    Only STUDY and GYM exist, and both trainers must fight on the same type, so
    a match is one habit versus the same habit. Every move is a real length of
-   work: 15 minutes of warm-up, a 2-hour library lock-in, a 6-hour all-nighter.
-   Damage comes straight out of that length — longer session, harder hit — so
-   the move list is a trade: big damage costs you hours you cannot pick again
-   until the timer runs out.
+   work; its damage, healing and uses are fixed per move and printed on the
+   button, and picking it locks you in for the full timer.
+
+   STUDY has nine sessions (pick six), GYM has seven (pick six).
    ========================================================================== */
 
 window.HF = window.HF || {};
@@ -16,11 +16,7 @@ window.HF = window.HF || {};
 
   const TYPES = ['STUDY', 'GYM'];
 
-  /* Long work hits harder, but sub-linearly: 20 minutes is a jab, six hours
-     ends the argument. 20 → 17, 2 h → 37, 6 h → 61. */
-  const powerFor = (mins) => Math.round(4 + Math.sqrt(mins) * 3);
-
-  /** 90 → "1H 30M", 120 → "2H", 15 → "15M". Used on every button. */
+  /** 90 → "1H 30M", 120 → "2H", 5 → "5M". Used on every button. */
   function durLabel(mins) {
     const m = Math.max(0, Math.round(Number(mins) || 0));
     if (m < 60) return m + 'M';
@@ -32,77 +28,73 @@ window.HF = window.HF || {};
   const RAW = {
     STUDY: [
       {
-        id: 'flashcards', name: 'FLASHCARD DRILL', mins: 20, pp: 8,
-        desc: 'Twenty minutes of cards. A quick 17-damage jab you can throw 8 times.',
-      },
-      {
-        id: 'readings', name: 'READING SPRINT', mins: 40, pp: 7,
-        effect: { status: 'PARALYSIS', chance: 0.4 },
-        desc: '40 minutes. 23 damage and a 40% chance to PARALYSE them (they may lose a session).',
-      },
-      {
-        id: 'silentfloor', name: 'SILENT FLOOR', mins: 60, pp: 5, heal: 18,
+        id: 'break10', name: '10 MIN BREAK', mins: 10, pp: 4, heal: 10,
         noDamage: true,
-        desc: 'A full quiet hour. No damage — heals you 18 HP.',
+        desc: 'Ten minutes off your feet. Heals 10 HP, 4 uses a match.',
       },
       {
-        id: 'wikihole', name: '3AM WIKI HOLE', mins: 75, pp: 6,
-        effect: { status: 'POISON', chance: 0.6 },
-        desc: '75 minutes down a rabbit hole. 30 damage, 60% chance to leave them DOOMSCROLLED (-4 HP a session).',
+        id: 'flashcards', name: '20 FLASHCARDS', mins: 30, pp: 5, power: 15,
+        desc: '30 minutes making 20 cards. 15 damage, 5 uses.',
       },
       {
-        id: 'pastpaper', name: 'PAST PAPER RUN', mins: 90, pp: 5,
-        desc: 'An hour and a half of past papers. 32 damage, no side effects.',
+        id: 'quiz', name: 'FINISH QUIZ', mins: 30, pp: 5, power: 10, heal: 5,
+        desc: '30 minutes. 10 damage and heals you 5 HP.',
       },
       {
-        id: 'libgrind', name: 'LIBRARY LOCK-IN', mins: 120, pp: 4,
-        desc: 'Two hours locked in the library. 37 damage — and a LOCKED IN steal if they are already statused.',
+        id: 'lecture', name: 'WATCH LECTURE', mins: 30, pp: 2, heal: 20,
+        noDamage: true,
+        desc: '30 minutes watching it back. Heals 20 HP — only 2 uses a match.',
       },
       {
-        id: 'deepwork', name: 'DEEP WORK BLOCK', mins: 180, pp: 3,
-        effect: { status: 'BURNOUT', chance: 0.4 },
-        desc: 'Three hours of deep work. 44 damage, 40% chance to BURN them out (-5 HP a session).',
+        id: 'pastpaper', name: 'PAST PAPER', mins: 60, pp: 4, power: 30,
+        desc: 'An hour of past papers. 30 damage, 4 uses.',
       },
       {
-        id: 'allnighter', name: 'ALL-NIGHTER', mins: 360, pp: 2,
-        self: { status: 'SNOOZE' },
-        desc: 'The whole night, six hours. 61 damage — the biggest hit in the game — then you SNOOZE.',
+        id: 'notes', name: 'MAKE NOTES', mins: 60, pp: 4, power: 30,
+        desc: 'An hour of notes. 30 damage, 4 uses.',
+      },
+      {
+        id: 'deeplearning', name: 'DEEP LEARNING', mins: 60, pp: 4, power: 30,
+        desc: 'An hour of deep learning. 30 damage, 4 uses.',
+      },
+      {
+        id: 'commitcode', name: 'COMMIT CODE', mins: 60, pp: 4, power: 20, heal: 10,
+        desc: 'An hour of coding. 20 damage and heals you 10 HP.',
+      },
+      {
+        id: 'coursework', name: 'COURSEWORK', mins: 120, pp: 3, power: 60,
+        desc: 'Two hours of coursework. 60 damage, 3 uses. The biggest study hit.',
       },
     ],
     GYM: [
       {
-        id: 'warmup', name: 'WARM-UP SET', mins: 15, pp: 8,
-        desc: 'Fifteen minutes to warm up. 16 damage, 8 uses.',
+        id: 'stretching', name: 'STRETCHING', mins: 5, pp: 8, power: 5,
+        desc: '5 minutes. 5 damage, 8 uses.',
       },
       {
-        id: 'coldshower', name: 'COLD SHOWER', mins: 20, pp: 6, cure: true,
-        desc: 'Twenty minutes. 17 damage and clears any status on you.',
+        id: 'pushups', name: '20 PUSH-UPS', mins: 5, pp: 8, power: 5,
+        desc: '5 minutes. 5 damage, 8 uses.',
       },
       {
-        id: 'treadmill', name: 'TREADMILL 5K', mins: 30, pp: 7,
-        desc: 'Thirty minutes on the treadmill. 20 damage, boring and reliable.',
+        id: 'rest', name: 'REST', mins: 5, pp: 6, heal: 5, noDamage: true,
+        desc: '5 minutes sitting down. Heals 5 HP, 6 uses.',
       },
       {
-        id: 'protein', name: 'PROTEIN SHAKE', mins: 30, pp: 5, heal: 16,
+        id: 'oneset', name: 'ONE SET', mins: 10, pp: 6, power: 10,
+        desc: '10 minutes for one set. 10 damage, 6 uses.',
+      },
+      {
+        id: 'treadmill', name: 'TREADMILL 5K', mins: 30, pp: 4, power: 30,
+        desc: '30 minutes. 30 damage, 4 uses.',
+      },
+      {
+        id: 'sparring', name: 'SPARRING SESSION', mins: 30, pp: 4, power: 30,
+        desc: '30 minutes. 30 damage, 4 uses.',
+      },
+      {
+        id: 'protein', name: 'PROTEIN SHAKE', mins: 1, pp: 1, heal: 10,
         noDamage: true,
-        desc: 'Thirty minutes of recovery. No damage — heals you 16 HP.',
-      },
-      {
-        id: 'sparring', name: 'SPARRING ROUND', mins: 45, pp: 6,
-        effect: { status: 'BURNOUT', chance: 0.35 },
-        desc: '45 minutes of sparring. 24 damage, 35% chance to BURN them out (-5 HP a session).',
-      },
-      {
-        id: 'gymsession', name: 'KCL GYM SESSION', mins: 60, pp: 5, heal: 8,
-        desc: 'An hour in the KCL gym. 27 damage and heals you 8 HP at the same time.',
-      },
-      {
-        id: 'onemore', name: 'ONE MORE REP', mins: 90, pp: 4,
-        desc: 'Ninety minutes, one more rep every time. 32 damage, 4 uses.',
-      },
-      {
-        id: 'legday', name: 'LEG DAY', mins: 120, pp: 2, self: { status: 'SNOOZE' },
-        desc: 'Two hours of legs, the longest gym session there is. 37 damage, then you SNOOZE.',
+        desc: 'One minute. Heals 10 HP — once per match.',
       },
     ],
   };
@@ -114,16 +106,21 @@ window.HF = window.HF || {};
   TYPES.forEach((type) => {
     POOLS[type] = RAW[type].map((move) => Object.assign({
       type,
-      power: move.noDamage ? 0 : powerFor(move.mins),
+      power: move.power || 0,
       dur: durLabel(move.mins),
     }, move));
   });
 
   const MOVES = TYPES.reduce((all, type) => all.concat(POOLS[type]), []);
 
+  const totals = (type) => POOLS[type].reduce((acc, move) => ({
+    mins: acc.mins + move.mins,
+    power: acc.power + move.power,
+  }), { mins: 0, power: 0 });
+
   HF.TYPES = TYPES;
   HF.POOLS = POOLS;
   HF.MOVES = MOVES;
-  HF.powerFor = powerFor;
   HF.durLabel = durLabel;
+  HF.poolTotals = totals;
 })(window.HF);
