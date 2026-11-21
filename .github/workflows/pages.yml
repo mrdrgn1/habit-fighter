@@ -14,11 +14,14 @@ concurrency:
 
 env:
   LIVE: https://habit-fighter-1ev30m.freebuff.site
-  STATIC_FILES: style.css ui.js firebase.js camera.js receipt.js game.js qrcode.js qr.js
+  STATIC_FILES: style.css ui.js firebase.js camera.js receipt.js moves.js game.js qrcode.js qr.js
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
